@@ -326,7 +326,7 @@ export async function renderGroupsPage(root: HTMLElement) {
       const checked = [...drawer.querySelectorAll<HTMLInputElement>('input[name=leave-bot]:checked')]
         .map(i => i.value);
       if (checked.length === 0) { alert('至少选一个机器人'); return; }
-      if (!confirm(`确定让 ${checked.length} 个机器人退出群聊？`)) return;
+      if (!confirm(`确定让 ${checked.length} 个机器人退出群聊？该 bot 在此群的会话会一并关闭。`)) return;
       try {
         const r = await fetch(`/api/groups/${encodeURIComponent(chat.chatId)}/leave`, {
           method: 'POST',
@@ -334,9 +334,16 @@ export async function renderGroupsPage(root: HTMLElement) {
           body: JSON.stringify({ larkAppIds: checked }),
         });
         const respBody = await r.json();
-        const lines = (respBody.result ?? []).map((x: any) =>
-          `${x.larkAppId}: ${x.ok ? 'OK' : `失败 (${x.error ?? 'unknown'})`}`
-        ).join('\n');
+        const lines = (respBody.result ?? []).map((x: any) => {
+          if (!x.ok) return `${x.larkAppId}: 失败 (${x.error ?? 'unknown'})`;
+          const closed = (x.closedSessions ?? []) as any[];
+          const failed = closed.filter(c => !c.ok).length;
+          const ok = closed.length - failed;
+          const note = closed.length === 0
+            ? ''
+            : failed === 0 ? `（关闭 ${ok} 个会话）` : `（关闭 ${ok} 个，${failed} 个失败）`;
+          return `${x.larkAppId}: OK${note}`;
+        }).join('\n');
         alert(lines || `Unexpected: ${JSON.stringify(respBody)}`);
         await loadGroups(); rerender();
       } catch (e) {
@@ -348,7 +355,7 @@ export async function renderGroupsPage(root: HTMLElement) {
 
     drawer.querySelector<HTMLButtonElement>('#g-disband-btn')!.onclick = async () => {
       if (inChat.length === 0) return;
-      if (!confirm(`确定解散群聊「${chat.name ?? chat.chatId}」？此操作不可恢复。`)) return;
+      if (!confirm(`确定解散群聊「${chat.name ?? chat.chatId}」？此操作不可恢复，本群所有机器人会话也会一并关闭。`)) return;
       // Try the owner bot first (highest success probability), then fall back
       // to other in-chat bots in case our ownerId match was wrong (e.g. owner
       // is a user, but a creator-bot with operate_as_owner scope is in chat).
@@ -365,7 +372,13 @@ export async function renderGroupsPage(root: HTMLElement) {
           });
           const respBody = await r.json();
           if (respBody.ok) {
-            alert(`已解散（由 ${m.botName ?? m.larkAppId} 执行）`);
+            const closed = (respBody.closedSessions ?? []) as any[];
+            const failed = closed.filter(c => !c.ok).length;
+            const ok = closed.length - failed;
+            const closedNote = closed.length === 0
+              ? ''
+              : failed === 0 ? `\n关闭了 ${ok} 个会话。` : `\n关闭了 ${ok} 个会话，${failed} 个会话关闭失败。`;
+            alert(`已解散（由 ${m.botName ?? m.larkAppId} 执行）${closedNote}`);
             await loadGroups(); rerender();
             drawer.close();
             return;

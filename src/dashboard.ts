@@ -158,6 +158,37 @@ async function proxyToDaemon(
   return fetch(`http://127.0.0.1:${d.ipcPort}${daemonPath}`, init);
 }
 
+/**
+ * Close every active session matching `pred` by routing to its owning daemon.
+ * Used after disband (close all sessions in chat) and leave (close only the
+ * leaving bot's sessions in chat) so the UI doesn't end up with zombie workers
+ * pointing at a chat the bot can no longer post into.
+ */
+async function closeSessionsMatching(
+  pred: (s: any) => boolean,
+): Promise<{ sessionId: string; ok: boolean; error?: string }[]> {
+  const matching = aggregator.getSessions().filter(s => s.status !== 'closed' && pred(s));
+  return Promise.all(matching.map(async s => {
+    try {
+      const upstream = await proxyToDaemon(
+        s.larkAppId as string,
+        `/api/sessions/${encodeURIComponent(s.sessionId)}/close`,
+        { method: 'POST' },
+      );
+      const text = await upstream.text();
+      let body: any = null;
+      try { body = JSON.parse(text); } catch { /* tolerate */ }
+      return {
+        sessionId: s.sessionId as string,
+        ok: !!body?.ok,
+        error: body?.ok ? undefined : (body?.error ?? `http_${upstream.status}`),
+      };
+    } catch (e: any) {
+      return { sessionId: s.sessionId as string, ok: false, error: e?.message ?? String(e) };
+    }
+  }));
+}
+
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
@@ -331,8 +362,18 @@ const server = createServer(async (req, res) => {
         appId, `/api/groups/${encodeURIComponent(chatId)}/disband`,
         { method: 'POST' },
       );
+      const upstreamText = await upstream.text();
+      let upstreamJson: any = null;
+      try { upstreamJson = JSON.parse(upstreamText); } catch { /* tolerate */ }
+      // On successful disband, the chat is gone for everyone — every bot's
+      // session in this chat becomes a zombie (worker still alive, can't post).
+      // Close them all so the UI / Sessions list don't keep them as active.
+      let closedSessions: any[] = [];
+      if (upstreamJson?.ok) {
+        closedSessions = await closeSessionsMatching(s => s.chatId === chatId);
+      }
       res.writeHead(upstream.status, { 'content-type': 'application/json' });
-      res.end(await upstream.text());
+      res.end(JSON.stringify({ ...(upstreamJson ?? {}), closedSessions }));
       return;
     }
 
@@ -377,10 +418,18 @@ const server = createServer(async (req, res) => {
         const text = await upstream.text();
         let body: any = null;
         try { body = JSON.parse(text); } catch { /* tolerate */ }
+        // On successful leave, the leaving bot can no longer post into the
+        // chat — its sessions there are stranded. Close only THIS bot's
+        // sessions for THIS chat (other bots may still be in the chat with
+        // their own active sessions).
+        const closedSessions = body?.ok
+          ? await closeSessionsMatching(s => s.chatId === chatId && s.larkAppId === appId)
+          : [];
         return {
           larkAppId: appId,
           ok: !!body?.ok,
           error: body?.ok ? undefined : (body?.error ?? `http_${upstream.status}`),
+          closedSessions,
         };
       }));
       return jsonRes(res, 200, { result });
