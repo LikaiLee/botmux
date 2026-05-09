@@ -61,9 +61,14 @@ export function findCocoSessionByPid(
   for (const fd of entries) {
     let target: string;
     try { target = readlinkSync(join(fdDir, fd)); } catch { continue; }
-    const cleanTarget = target.replace(/ \(deleted\)$/, '');
-    if (!cleanTarget.startsWith(prefix)) continue;
-    const sid = cleanTarget.slice(prefix.length).split('/')[0];
+    // Skip handles whose backing file has been unlinked. procfs marks these
+    // with a literal " (deleted)" suffix. Returning a sid from a deleted
+    // session dir lets adopt run forever waiting on an events.jsonl that
+    // CoCo writes to a dangling inode — empirically observed when an e2e
+    // test wiped the session dir without restarting CoCo.
+    if (target.endsWith(' (deleted)')) continue;
+    if (!target.startsWith(prefix)) continue;
+    const sid = target.slice(prefix.length).split('/')[0];
     if (sid && SESSION_UUID_RE.test(sid)) {
       return { sessionId: sid, eventsPath: cocoEventsPathForSession(sid) };
     }

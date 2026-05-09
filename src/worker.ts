@@ -2136,7 +2136,23 @@ function spawnCli(cfg: Extract<DaemonToWorker, { type: 'init' }>): void {
         if (probed) eventsPath = probed.eventsPath;
       }
       if (eventsPath) {
-        codexBridgeAttach(eventsPath, 'split-live');
+        // If the session DIRECTORY is missing (not just events.jsonl), CoCo
+        // is operating on an unlinked inode — common after an e2e test or
+        // manual cleanup wiped the dir while CoCo kept its fds open. The
+        // bridge file will never appear, so warn the user once via Lark
+        // instead of polling forever in silence.
+        const sessionDir = dirname(eventsPath);
+        if (!existsSync(sessionDir)) {
+          send({
+            type: 'final_output',
+            content: '⚠️ 当前 CoCo 进程的会话目录已被删除（可能是 e2e 测试清理或手动 rm），写到 events.jsonl 的内容会落到一个失效 inode 上，桥接读不到。请重启 CoCo 后重新 /adopt。',
+            lastUuid: `coco-adopt-stale-${randomBytes(4).toString('hex')}`,
+            turnId: 'coco-adopt-stale',
+          });
+          log(`CoCo adopt: session dir missing, bridge disabled (${sessionDir})`);
+        } else {
+          codexBridgeAttach(eventsPath, 'split-live');
+        }
       } else {
         // No sid known yet — fall back to PID-walk in the late-attach
         // poller. Reuses codexAdoptPendingPid since the timer dispatches
