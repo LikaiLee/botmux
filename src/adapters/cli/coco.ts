@@ -22,7 +22,13 @@ function currentFileSize(path: string): number {
   try { return statSync(path).size; } catch { return 0; }
 }
 
-function historyDeltaContains(path: string, fromByte: number, marker: string): boolean {
+/** Scan `path` for a JSON line newer than `fromByte` that's a user-submit
+ *  whose decoded `content` starts with `prefix`. Parses each candidate line
+ *  with JSON.parse — substring match on the raw bytes is unreliable here
+ *  because CoCo's Go marshaller HTML-escapes `<`, `>`, `&` into `<`,
+ *  `>`, `&`, which our string-form prefix won't match. Decoding
+ *  the field and comparing JS strings sidesteps all of that. */
+function historyDeltaContains(path: string, fromByte: number, prefix: string): boolean {
   if (!existsSync(path)) return false;
   let size: number;
   try { size = statSync(path).size; } catch { return false; }
@@ -37,29 +43,37 @@ function historyDeltaContains(path: string, fromByte: number, marker: string): b
   }
   const delta = buf.toString('utf8');
   for (const line of delta.split('\n')) {
-    if (line.includes('"mode":"user"') && line.includes(marker)) return true;
+    if (!line || !line.includes('"mode":"user"')) continue;
+    try {
+      const parsed = JSON.parse(line);
+      if (typeof parsed.content === 'string' && parsed.content.startsWith(prefix)) {
+        return true;
+      }
+    } catch {
+      // Truncated tail / non-JSON line — keep scanning the rest.
+    }
   }
   return false;
 }
 
 async function waitForHistoryAppend(
-  path: string, fromByte: number, marker: string, timeoutMs: number,
+  path: string, fromByte: number, prefix: string, timeoutMs: number,
 ): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (historyDeltaContains(path, fromByte, marker)) return true;
+    if (historyDeltaContains(path, fromByte, prefix)) return true;
     await delay(100);
   }
   return false;
 }
 
-/** Build a JSON-escaped prefix of content so substring-match against the raw
- *  history.jsonl works (the content field stores \n as the two-char escape
- *  `\n`, not a literal newline). 40 chars is unique enough across concurrent
- *  bots. Mirrors codex.ts's approach. */
-function historyMarker(content: string): string {
-  const prefix = content.slice(0, 40);
-  return JSON.stringify(prefix).slice(1, -1);  // strip surrounding quotes
+/** First 40 chars of the original content — used as a prefix match against
+ *  the JSON-decoded `content` field of each user-mode line in history.jsonl.
+ *  Compare against decoded strings, NOT against raw file bytes: CoCo's Go
+ *  marshaller HTML-escapes `<`, `>`, `&` so a JSON-encoded marker wouldn't
+ *  match the stored bytes. 40 chars is unique enough across concurrent bots. */
+function submitPrefix(content: string): string {
+  return content.slice(0, 40);
 }
 
 export function createCocoAdapter(pathOverride?: string): CliAdapter {
@@ -125,7 +139,7 @@ export function createCocoAdapter(pathOverride?: string): CliAdapter {
       };
 
       const baseByte = currentFileSize(HISTORY_PATH);
-      const marker = historyMarker(content);
+      const prefix = submitPrefix(content);
 
       try {
         if (pty.sendText && pty.sendSpecialKeys) {
@@ -162,7 +176,7 @@ export function createCocoAdapter(pathOverride?: string): CliAdapter {
       // through to the normal retry/failure loop — better to warn than to
       // silently mask a real submit failure on a new install.
       if (!existsSync(HISTORY_PATH) && baseByte === 0) {
-        if (await waitForHistoryAppend(HISTORY_PATH, baseByte, marker, 1200)) {
+        if (await waitForHistoryAppend(HISTORY_PATH, baseByte, prefix, 1200)) {
           return undefined;
         }
         if (!existsSync(HISTORY_PATH)) {
@@ -174,19 +188,19 @@ export function createCocoAdapter(pathOverride?: string): CliAdapter {
       }
 
       for (let attempt = 0; attempt < 3; attempt++) {
-        if (await waitForHistoryAppend(HISTORY_PATH, baseByte, marker, 800)) {
+        if (await waitForHistoryAppend(HISTORY_PATH, baseByte, prefix, 800)) {
           return undefined;
         }
         if (!trySendEnter()) return { submitted: false };
       }
-      if (await waitForHistoryAppend(HISTORY_PATH, baseByte, marker, 800)) {
+      if (await waitForHistoryAppend(HISTORY_PATH, baseByte, prefix, 800)) {
         return undefined;
       }
       // In-band budget exhausted. Hand the worker a recheck closure: a slow
       // CoCo (cold start, large initial prompt, heavy hooks) may still
       // append our marker after retries gave up. Worker re-scans after a
       // delay before deciding whether to warn the user.
-      const recheck = (): boolean => historyDeltaContains(HISTORY_PATH, baseByte, marker);
+      const recheck = (): boolean => historyDeltaContains(HISTORY_PATH, baseByte, prefix);
       return { submitted: false, recheck };
     },
 

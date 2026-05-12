@@ -767,6 +767,47 @@ describe('coco writeInput submission confirmation', () => {
     expect(enterCalls).toBe(6);
   });
 
+  it('matches HTML-escaped angle brackets that Go marshalling emits (regression)', async () => {
+    // CoCo's Go encoder turns "<user_message>..." into "<user_message>..."
+    // in the on-disk JSON. A naive substring-match against JSON.stringify(content)
+    // (what we did before) would miss this — JS's JSON.stringify leaves `<`
+    // alone. Adapter must JSON-decode each candidate line and compare strings.
+    //
+    // We use a custom mock that, on the FINAL submit Enter, appends a
+    // Go-shaped line (with literal `<` etc.) rather than the JS-shaped
+    // line the default helper writes. The successful-submit assertion then
+    // exercises the JSON-decode + startsWith path.
+    resetCocoHistory();
+    appendCocoHistory('seed prior submit so file exists');
+
+    const angled = '<user_message>\n@CoCo hello\n</user_message>';
+    let pendingBackslash = false;
+    let submittedOnce = false;
+    const pty: PtyHandle = {
+      write: vi.fn(),
+      sendText: vi.fn((text: string) => { pendingBackslash = (text === '\\'); }),
+      sendSpecialKeys: vi.fn((key: string) => {
+        if (key !== 'Enter') return;
+        if (pendingBackslash) { pendingBackslash = false; return; }
+        if (submittedOnce) return;
+        submittedOnce = true;
+        // Mimic Go's encoder: HTML-escape `<` `>` `&`, encode \n as the
+        // two-char escape `\n`. This is what we observe in the real
+        // ~/.cache/coco/history.jsonl after a CoCo submit.
+        const goShaped = `{"content":"\\u003cuser_message\\u003e\\n@CoCo hello\\n\\u003c/user_message\\u003e","mode":"user","timestamp":"2026-05-12T13:56:29Z"}`;
+        appendFileSync(COCO_HISTORY_PATH, goShaped + '\n');
+      }),
+      pasteText: vi.fn(),
+    };
+
+    const adapter = createCocoAdapter('/bin/coco');
+    const result = await adapter.writeInput(pty, angled);
+
+    // Success path: JSON-decode + startsWith finds the Go-escaped content,
+    // so writeInput returns undefined (no warning queued).
+    expect(result).toBeUndefined();
+  });
+
   it('skips verification on fresh install with no history.jsonl yet', async () => {
     // No appendCocoHistory call → file doesn't exist in memfs.
     // Adapter should trust the Enter and return undefined rather than
