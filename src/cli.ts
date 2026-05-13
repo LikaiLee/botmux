@@ -1938,6 +1938,14 @@ async function cmdSend(rest: string[]): Promise<void> {
     // app's cross-ref file for per-app-scoped open_ids. Without this, a plain
     // "@Claude" in text only triggers IPC routing but Lark UI shows it as
     // plain text — confusing the user who thinks the @ didn't fire.
+    //
+    // bot-to-bot @mention 实际有两条触发路径，最终都会落到下方的 mentions 数组、
+    // 进而写出 bot-mention signal 文件：
+    //   1) 显式 `botmux send --mention <open_id>`：mentionArgs 直接进 mentions。
+    //   2) 正文里出现 `@BotName`（注册过的 bot 名 + 大小写不敏感 + 严格边界）：
+    //      下面这段扫描命中后，从 cross-ref 拿到 sender-scoped open_id 注入 mentions。
+    // 两条路径殊途同归，daemon 端 processBotMentionSignal 不区分来源；同名歧义
+    // 由 utils/bot-routing.ts 的 pickBotEntryByName 在两条路径上统一兜底。
     try {
       const dataDir = resolveDataDir();
       const botInfoPath = join(dataDir, 'bots-info.json');
