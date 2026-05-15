@@ -27,7 +27,7 @@ import {
   type PidFollowResult,
 } from './services/bridge-rotation-policy.js';
 import { CodexBridgeQueue } from './services/codex-bridge-queue.js';
-import { drainCodexRollout, findCodexRolloutBySessionId, findCodexRolloutByPid, splitCodexEventsByCutoff } from './services/codex-transcript.js';
+import { drainCodexRollout, findCodexRolloutBySessionId, findCodexRolloutByPid, splitCodexEventsByCutoff, extractLastCodexTurn } from './services/codex-transcript.js';
 import { cocoEventsPathForSession, drainCocoEvents, findCocoSessionByPid } from './services/coco-transcript.js';
 import { dirname } from 'node:path';
 import { createServer as createHttpServer, type IncomingMessage } from 'node:http';
@@ -189,6 +189,12 @@ let codexAdoptPendingPid: number | undefined;
  *  skew tolerance is applied on top, mirroring the Lark/Claude bridges. */
 let codexAdoptStartMs: number | undefined;
 
+/** Adopt-only: 一次性发送的 "/adopt 前最后一轮" preamble 是否已经触发过。
+ *  codexBridgeAttach 在 split-live 分支会查 history 取最后一对 user/assistant
+ *  发给 daemon —— late-attach poller 也会反复走这条分支（每秒一次），所以
+ *  必须有标志位防重发。镜像 claude 那套 bridgePreambleSent 的角色。 */
+let codexBridgePreambleSent = false;
+
 /** Cap the preamble text so an extremely long previous turn doesn't blow
  *  past Lark's per-message limit. The user only needs enough to recall
  *  context, not the entire transcript. */
@@ -206,40 +212,23 @@ function truncatePreambleText(text: string, max: number): string {
   return text.slice(0, max) + '…';
 }
 
-/** Compose a `final_output` payload for a turn synthesised from a user
- *  prompt the human typed directly into the adopted pane. Shows both the
- *  user text and assistant text so the Lark thread doesn't see an orphan
- *  reply with no context. Returns `null` when neither side has anything
- *  visible — the worker should suppress the emit in that case. */
-function formatLocalTurnContent(userText: string, assistantText: string): string | null {
+/** Prepare a local-turn `final_output` payload. The daemon owns the card
+ *  chrome (label/quote/markdown body), so we ship the user prompt and
+ *  assistant text as separate fields — see card-builder `buildContextualReplyCard`.
+ *  Returns null when both sides are empty so the caller can skip the emit. */
+function formatLocalTurnFields(userText: string, assistantText: string): { userText: string; content: string } | null {
   const u = truncatePreambleText(userText.trim(), LOCAL_TURN_USER_MAX);
   const a = truncatePreambleText(assistantText.trim(), LOCAL_TURN_ASSISTANT_MAX);
   if (!u && !a) return null;
-  return [
-    '🖥️ 终端本地对话（在 adopted pane 中直接输入，已同步至飞书）',
-    '',
-    '👤 你：',
-    u || '(空)',
-    '',
-    `🤖 ${cliName()}：`,
-    a || '(空)',
-  ].join('\n');
+  return { userText: u, content: a };
 }
 
-/** Compose a `final_output` payload for a HEADLESS local turn — assistant
- *  text arrived without a known user side. Typically: daemon restart cut
- *  off an in-flight model stream; the original user event was absorbed
- *  at baseline so we have no userUuid to resolve, but the rest of the
- *  reply still deserves to land in Lark. */
+/** Same as `formatLocalTurnFields` but for HEADLESS local turns — daemon
+ *  restart cut off an in-flight model stream so we have an assistant side
+ *  with no resolvable user prompt. */
 function formatHeadlessLocalTurnContent(assistantText: string): string | null {
   const a = truncatePreambleText(assistantText.trim(), LOCAL_TURN_ASSISTANT_MAX);
-  if (!a) return null;
-  return [
-    '🖥️ 终端本地对话续传（daemon 重启时模型正在输出）',
-    '',
-    `🤖 ${cliName()}：`,
-    a,
-  ].join('\n');
+  return a || null;
 }
 
 // ─── Bridge fallback marker (non-adopt) ────────────────────────────────────
@@ -305,6 +294,28 @@ function maybeEmitAdoptPreamble(events: TranscriptEvent[]): void {
     assistantText: truncatePreambleText(turn.assistantText, PREAMBLE_ASSISTANT_MAX),
   });
   log('Bridge adopt preamble emitted (last completed turn from baseline)');
+}
+
+/** Codex / CoCo 镜像版：split-live 攒齐 history 后挑最后一对 user/assistant_final
+ *  发回 daemon 渲染成 "📜 /adopt 前最后一轮" 卡片。语义、跳过条件、字数截断都
+ *  对齐 maybeEmitAdoptPreamble；区别只在事件取出方式（codex/coco 是结构化
+ *  event，不需要走 claude 那套 jsonl turn assembly）。 */
+function maybeEmitCodexAdoptPreamble(
+  history: readonly { kind: 'user' | 'assistant_final'; text: string }[],
+): void {
+  if (!lastInitConfig?.adoptMode) return;
+  if (lastInitConfig?.adoptRestoredFromMetadata) return;
+  if (codexBridgePreambleSent) return;
+  const turn = extractLastCodexTurn(history);
+  if (!turn) return;
+  if (!turn.userText.trim() && !turn.assistantText.trim()) return;
+  codexBridgePreambleSent = true;
+  send({
+    type: 'adopt_preamble',
+    userText: truncatePreambleText(turn.userText, PREAMBLE_USER_MAX),
+    assistantText: truncatePreambleText(turn.assistantText, PREAMBLE_ASSISTANT_MAX),
+  });
+  log('Codex bridge adopt preamble emitted (last completed turn from split-live history)');
 }
 
 /** Extract the sessionId from a Claude jsonl path and add it to the
@@ -1110,16 +1121,29 @@ function emitReadyTurns(): void {
         // attachment.prompt) so type-ahead'd local input renders the same as
         // a normally-typed pane prompt.
         const userEv = drained.events.find(e => e.uuid === turn.userUuid);
-        const userText = userEv ? extractTurnStartText(userEv) : '';
-        const content = formatLocalTurnContent(userText, assistantText);
-        if (!content) continue;
-        send({ type: 'final_output', content, lastUuid, turnId: turn.turnId });
+        const rawUserText = userEv ? extractTurnStartText(userEv) : '';
+        const fields = formatLocalTurnFields(rawUserText, assistantText);
+        if (!fields) continue;
+        send({
+          type: 'final_output',
+          content: fields.content,
+          lastUuid,
+          turnId: turn.turnId,
+          kind: 'local-turn',
+          userText: fields.userText,
+        });
         continue;
       }
       // Headless local turn — see formatHeadlessLocalTurnContent for context.
       const headlessContent = formatHeadlessLocalTurnContent(assistantText);
       if (!headlessContent) continue;
-      send({ type: 'final_output', content: headlessContent, lastUuid, turnId: turn.turnId });
+      send({
+        type: 'final_output',
+        content: headlessContent,
+        lastUuid,
+        turnId: turn.turnId,
+        kind: 'local-turn-headless',
+      });
       continue;
     }
 
@@ -1259,6 +1283,7 @@ function codexBridgeAttach(rolloutPath: string, mode: 'baseline-existing' | 'fre
     codexBridgePendingTail = result.pendingTail;
     codexBridgeBaselineDone = true;
     log(`Codex bridge split-live: ${rolloutPath} (history=${history.length}, live=${live.length}, cutoff=${cutoff}, offset=${codexBridgeOffset})`);
+    maybeEmitCodexAdoptPreamble(history);
   } else if (mode === 'split-live') {
     // split-live requested but file missing — degrade to fresh: the file
     // will appear later via fs.watch / poller, and ingest from offset 0
@@ -1290,6 +1315,12 @@ function codexBridgeAttach(rolloutPath: string, mode: 'baseline-existing' | 'fre
   } catch (err: any) {
     log(`Codex bridge fs.watch unavailable (${err.message}); relying on poller`);
   }
+  // macOS 上 fs.watch 对 codex/coco 的外部进程追加 rollout / events.jsonl
+  // 经常静默丢事件（FSEvents 跨进程不可靠），所以无论 watcher 是否 attach
+  // 成功，都必须起 1s poller 兜底 —— 不然 split-live 成功的 adopt session
+  // 在 macOS 上会卡死，永远收不到模型回复。Linux 上 poller 多 tick 也无害
+  // （codexBridgeIngest 在 offset 未推进时是 no-op）。
+  codexBridgeStartTimer();
 }
 
 /** Called from flushPending after writeInput first returns a cliSessionId.
@@ -1363,11 +1394,18 @@ function emitReadyCodexTurns(): void {
     if (turn.isLocal) {
       // Local turn (adopt only): user typed in iTerm. Surface both sides
       // so the Lark thread sees a complete exchange instead of an orphan
-      // reply. formatLocalTurnContent caps both texts to keep within
-      // Lark's per-message limit.
-      const content = formatLocalTurnContent(turn.userText ?? '', turn.finalText);
-      if (!content) continue;
-      send({ type: 'final_output', content, lastUuid: turn.turnId, turnId: turn.turnId });
+      // reply. formatLocalTurnFields caps both texts to keep within
+      // Lark's per-message limit; daemon owns the card chrome.
+      const fields = formatLocalTurnFields(turn.userText ?? '', turn.finalText);
+      if (!fields) continue;
+      send({
+        type: 'final_output',
+        content: fields.content,
+        lastUuid: turn.turnId,
+        turnId: turn.turnId,
+        kind: 'local-turn',
+        userText: fields.userText,
+      });
       continue;
     }
     send({ type: 'final_output', content: turn.finalText, lastUuid: turn.turnId, turnId: turn.turnId });
