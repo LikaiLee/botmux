@@ -27,6 +27,12 @@ export type RegisterAppOk = {
   appId: string;
   appSecret: string;
   brand: RegisterBrand;
+  /**
+   * 扫码人的 open_id (飞书 device flow `request_user_info=open_id tenant_brand`
+   * 字段返回). 给 setup 用作 `allowedUsers` 默认值, 省掉用户手动输入"我自己"
+   * 这一步. 没拿到时为 undefined (理论上不会, 但接口可能改).
+   */
+  userOpenId?: string;
 };
 
 export type RegisterAppErr = {
@@ -99,12 +105,17 @@ export async function tryRegisterApp(opts: RegisterAppOptions = {}): Promise<Reg
     }
 
     const brand: RegisterBrand = result.user_info?.tenant_brand === 'lark' ? 'lark' : 'feishu';
+    const userOpenId =
+      typeof result.user_info?.open_id === 'string' && result.user_info.open_id.startsWith('ou_')
+        ? result.user_info.open_id
+        : undefined;
 
     return {
       ok: true,
       appId: result.client_id,
       appSecret: result.client_secret,
       brand,
+      userOpenId,
     };
   } catch (err: any) {
     // SDK 抛 LarkChannelError, code 字段对齐 RFC 8628 的 device flow 错误

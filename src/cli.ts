@@ -280,7 +280,7 @@ function printRemainingSteps(appId: string, brand: 'feishu' | 'lark'): void {
  * - 任何失败都返回结构化对象, 不抛 (调用方根据 ok=false 回退)
  */
 async function obtainCredentials(rl: ReturnType<typeof createInterface>): Promise<
-  | { ok: true; appId: string; appSecret: string; brand: 'feishu' | 'lark' }
+  | { ok: true; appId: string; appSecret: string; brand: 'feishu' | 'lark'; userOpenId?: string }
   | { ok: false; reason: 'cancelled' | 'lark_unsupported' }
 > {
   console.log('── 飞书应用建立 ──\n');
@@ -309,7 +309,16 @@ async function obtainCredentials(rl: ReturnType<typeof createInterface>): Promis
       console.log(`\n✅ 应用创建成功`);
       console.log(`   App ID: ${result.appId}`);
       console.log(`   租户类型: ${result.brand}`);
-      return { ok: true, appId: result.appId, appSecret: result.appSecret, brand: result.brand };
+      if (result.userOpenId) {
+        console.log(`   扫码人 open_id: ${result.userOpenId}（将默认作为 allowedUsers）`);
+      }
+      return {
+        ok: true,
+        appId: result.appId,
+        appSecret: result.appSecret,
+        brand: result.brand,
+        userOpenId: result.userOpenId,
+      };
     }
     console.log(`\n⚠️  扫码失败 (${result.error}): ${result.message}`);
     if (result.error === 'aborted') {
@@ -359,7 +368,22 @@ async function promptBotConfig(rl: ReturnType<typeof createInterface>): Promise<
   const cliIdMap: Record<string, string> = { '1': 'claude-code', '2': 'aiden', '3': 'coco', '4': 'codex', '5': 'gemini', '6': 'opencode' };
   const cliId = cliIdMap[cliChoice] ?? (cliChoice || 'claude-code');
   const workingDir = await ask(rl, '默认工作目录 [~]: ');
-  const allowedUsers = await ask(rl, '允许的用户 (邮箱或 open_id，逗号分隔，留空=不限制): ');
+
+  // 扫码场景: registerApp 已经免费给了扫码人 open_id, 直接拿来当 allowedUsers
+  // 默认值, 用户回车就用"只允许自己". 想多人共用回退到逗号分隔输入. 手动 fallback
+  // 路径没 open_id, 提示文案跟之前一致.
+  const ownerPrompt = creds.userOpenId
+    ? `允许的用户 [默认: 你自己 (${creds.userOpenId.substring(0, 12)}…)，回车采用; 多人用逗号分隔; 输入 - 表示不限制]: `
+    : '允许的用户 (邮箱或 open_id，逗号分隔，留空=不限制): ';
+  const allowedUsersInput = (await ask(rl, ownerPrompt)).trim();
+  let allowedUsers: string;
+  if (creds.userOpenId) {
+    if (allowedUsersInput === '-') allowedUsers = '';
+    else if (allowedUsersInput === '') allowedUsers = creds.userOpenId;
+    else allowedUsers = allowedUsersInput;
+  } else {
+    allowedUsers = allowedUsersInput;
+  }
 
   // brand 必须持久化: cmdStart 的 validate / event-dispatcher 走的 deep link
   // 都看这个字段; 不写就只能硬编码 feishu, lark 租户用户会被打成凭证无效.

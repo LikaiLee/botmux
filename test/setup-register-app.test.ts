@@ -28,7 +28,7 @@ describe('tryRegisterApp', () => {
     mockedRegisterApp.mockResolvedValue({
       client_id: 'cli_test_feishu',
       client_secret: 'secret-feishu-xxx',
-      user_info: { tenant_brand: 'feishu' },
+      user_info: { tenant_brand: 'feishu', open_id: 'ou_abc123' },
     });
 
     const onQR = vi.fn();
@@ -38,7 +38,23 @@ describe('tryRegisterApp', () => {
       expect(r.appId).toBe('cli_test_feishu');
       expect(r.appSecret).toBe('secret-feishu-xxx');
       expect(r.brand).toBe('feishu');
+      expect(r.userOpenId).toBe('ou_abc123');
     }
+  });
+
+  it('passes through scanner open_id (only when prefixed with ou_)', async () => {
+    mockedRegisterApp.mockResolvedValueOnce({
+      client_id: 'cli_x', client_secret: 'sec', user_info: { open_id: 'ou_valid_xxx' },
+    });
+    const r1 = await tryRegisterApp({ onQRCodeReady: () => {}, onStatusChange: () => {} });
+    expect(r1.ok && r1.userOpenId).toBe('ou_valid_xxx');
+
+    // Bad prefix → ignore, undefined
+    mockedRegisterApp.mockResolvedValueOnce({
+      client_id: 'cli_x', client_secret: 'sec', user_info: { open_id: 'weird_no_prefix' },
+    });
+    const r2 = await tryRegisterApp({ onQRCodeReady: () => {}, onStatusChange: () => {} });
+    expect(r2.ok && r2.userOpenId).toBeUndefined();
   });
 
   it('returns brand=lark when SDK reports tenant_brand=lark', async () => {
