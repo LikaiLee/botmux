@@ -173,13 +173,19 @@ CLI 进入 botmux 会话时自动获得 `~/.botmux/bin` 在 PATH 中，以及一
 
 ## 5 分钟快速接入
 
+> 💡 **TL;DR**：跑 `botmux setup` 选「扫码建应用」一步完成 Step 1+2（拿 AppID/AppSecret）；Step 3-6（权限、事件订阅、发版）飞书开放平台没开放写 API，仍需手动在浏览器里点。setup 完成后会自动打印剩余步骤的深链。
+
 ### Step 1: 创建飞书应用
 
-打开 [飞书开放平台](https://open.larkoffice.com/app)，点击「创建企业自建应用」。
+**推荐路径**：`botmux setup` 选「1) 扫码建应用」，飞书扫码完成后自动落盘 AppID/AppSecret，无需手动浏览器创建。底层走 `@larksuiteoapi/node-sdk` 的官方 device flow。
+
+**手动路径**：打开 [飞书开放平台](https://open.larkoffice.com/app)，点击「创建企业自建应用」。
 
 ![创建应用](docs/setup/create-app.png)
 
 ### Step 2: 获取凭证
+
+> 扫码路径自动完成此步，可直接跳到 Step 3。
 
 进入应用详情 →「凭证与基础信息」，复制 **App ID** 和 **App Secret**。
 
@@ -225,10 +231,12 @@ CLI 进入 botmux 会话时自动获得 `~/.botmux/bin` 在 PATH 中，以及一
 # 安装
 npm install -g botmux
 
-# 交互式配置 — 输入 Step 2 的 App ID 和 App Secret
+# 交互式配置 — 选「1) 扫码建应用」或「2) 手动粘 AppID/Secret」
+# 凭证拿到后自动取一次 tenant_access_token 校验，通过才落盘 bots.json
 botmux setup
 
 # 启动（飞书后台配置长连接订阅前需要先启动，否则无法检测到连接）
+# start 前再校验一次凭证；权限/事件订阅未配齐不会阻塞 daemon，只 WARN
 botmux start
 ```
 

@@ -26,6 +26,7 @@ import { createRequire } from 'node:module';
 import { createHmac, randomBytes } from 'node:crypto';
 import { enableAutostart, disableAutostart, autostartStatus, refreshAutostart } from './autostart.js';
 import { tmuxEnv } from './setup/ensure-tmux.js';
+import { writeBotsJsonAtomic as writeBotsAtomic } from './setup/bots-store.js';
 import { logger } from './utils/logger.js';
 import { firstPositional } from './cli/arg-utils.js';
 
@@ -153,31 +154,112 @@ function ask(rl: ReturnType<typeof createInterface>, question: string): Promise<
 
 // ─── Setup helpers ──────────────────────────────────────────────────────────
 
-function printLarkPermissions(): void {
-  console.log('请先在飞书开放平台创建应用: https://open.feishu.cn/app\n');
-  console.log('需要的权限:');
-  console.log('  - im:message (发送/接收消息)');
-  console.log('  - im:message.group_at_msg (群消息)');
-  console.log('  - im:resource (文件下载)');
-  console.log('  - im:chat (群信息)');
-  console.log('  - contact:user.base:readonly (用户信息)\n');
-  console.log('启用事件订阅 (WebSocket 模式):');
-  console.log('  - im.message.receive_v1');
-  console.log('  - card.action.trigger\n');
+// Thin wrapper around setup/bots-store.writeBotsJsonAtomic so call-sites keep
+// the same name without passing BOTS_JSON_FILE explicitly each time.
+function writeBotsJsonAtomic(bots: any[]): void {
+  writeBotsAtomic(BOTS_JSON_FILE, bots);
 }
 
-async function promptBotConfig(rl: ReturnType<typeof createInterface>): Promise<Record<string, any>> {
-  const appId = await ask(rl, 'LARK_APP_ID: ');
-  const appSecret = await ask(rl, 'LARK_APP_SECRET: ');
+function printRemainingSteps(appId: string, brand: 'feishu' | 'lark'): void {
+  // verify-permissions.ts 的 buildRemainingSteps 是数据源, 这里只负责打印
+  // 为了避免在 cli.ts 启动时同步导入 Lark SDK (registerApp/verify-permissions
+  // 两个模块都拖 SDK 进来), 直接复用深链构造常量
+  const host = brand === 'lark' ? 'open.larksuite.com' : 'open.feishu.cn';
+  const home = `https://${host}/app/${appId}`;
+  console.log('\n⚠️  扫码/粘贴只完成了"建应用 + 拿凭证". 飞书开放平台没开放写 API,');
+  console.log('   以下几步必须用户手动在浏览器里点完, botmux 才能真正收到消息：\n');
+  console.log('  1. 开通 scope 并提交审批（im:message / im:message.group_at_msg / im:resource / im:chat / contact:user.base:readonly）');
+  console.log(`     ${home}/auth\n`);
+  console.log('  2. 配置事件订阅（长连接模式，订阅 im.message.receive_v1 + card.action.trigger）');
+  console.log(`     ${home}/dev-config/event-sub\n`);
+  console.log('  3. 开通机器人能力（应用功能 → 机器人，设置名称和头像）');
+  console.log(`     ${home}/feature/bot\n`);
+  console.log('  完成后 `botmux start` (或 `botmux restart`)，启动检查不会卡住，');
+  console.log('  缺权限只 WARN，去开放平台补齐后 daemon 自动恢复。\n');
+}
 
-  console.log('\n支持的 CLI: 1) claude-code  2) aiden  3) coco  4) codex  5) gemini  6) opencode');
+/**
+ * 让用户选"扫码建应用"还是"手动粘 AppID/Secret".
+ *
+ * 默认走扫码: 调 SDK `registerApp` → 拿 client_id/client_secret. 失败 (用户拒绝/
+ * 超时/网络/取消) 一律降级到手动, 不阻塞流程.
+ *
+ * Codex review 边界:
+ * - secret 不进 argv / 日志 / 错误链 (registerApp 内部 safeMsg 已做; 手动模式下
+ *   AppSecret 通过 rl.question 异步读取, 不会出现在 process.argv)
+ * - 任何失败都返回结构化对象, 不抛 (调用方根据 ok=false 回退)
+ */
+async function obtainCredentials(rl: ReturnType<typeof createInterface>): Promise<
+  | { ok: true; appId: string; appSecret: string; brand: 'feishu' | 'lark' }
+  | { ok: false; reason: 'cancelled' }
+> {
+  console.log('── 飞书应用建立 ──\n');
+  console.log('1) 扫码建应用（推荐，一步拿到 AppID/Secret，需要飞书 App 扫码）');
+  console.log('2) 手动粘 AppID/Secret（已经在开放平台创建好应用了）\n');
+  const choice = (await ask(rl, '选择 [1]: ')).trim();
+
+  if (choice !== '2') {
+    // 动态导入避免冷启动加载 SDK
+    const { tryRegisterApp } = await import('./setup/register-app.js');
+    const result = await tryRegisterApp();
+    if (result.ok) {
+      console.log(`\n✅ 应用创建成功`);
+      console.log(`   App ID: ${result.appId}`);
+      console.log(`   租户类型: ${result.brand}`);
+      return { ok: true, appId: result.appId, appSecret: result.appSecret, brand: result.brand };
+    }
+    console.log(`\n⚠️  扫码失败 (${result.error}): ${result.message}`);
+    if (result.error === 'aborted') {
+      // 用户主动取消整个 setup, 不再问手动 fallback
+      return { ok: false, reason: 'cancelled' };
+    }
+    console.log('   降级到手动输入 AppID/Secret。\n');
+  } else {
+    console.log('\n请在浏览器打开 https://open.feishu.cn/app 创建应用，然后回来粘 ID/Secret。\n');
+  }
+
+  // 手动 fallback
+  const appId = (await ask(rl, 'AppID (cli_xxx): ')).trim();
+  const appSecret = (await ask(rl, 'AppSecret: ')).trim();
+  const brandInput = (await ask(rl, '租户类型 1) feishu  2) lark  [1]: ')).trim();
+  const brand: 'feishu' | 'lark' = brandInput === '2' ? 'lark' : 'feishu';
+
+  if (!appId || !appSecret) {
+    console.log('\n❌ AppID/AppSecret 不能为空，setup 中止。');
+    return { ok: false, reason: 'cancelled' };
+  }
+  return { ok: true, appId, appSecret, brand };
+}
+
+/**
+ * 收集一个机器人完整配置 (凭证 + CLI/工作目录/allowedUsers).
+ *
+ * 顺序: 拿凭证 → tenant_access_token 验证 → 通过才返回 bot 对象. 验证失败
+ * 直接返回 null, 调用方负责"不写 bots.json". Codex review 边界 #2.
+ */
+async function promptBotConfig(rl: ReturnType<typeof createInterface>): Promise<Record<string, any> | null> {
+  const creds = await obtainCredentials(rl);
+  if (!creds.ok) return null;
+
+  // 凭证立刻验证. 通不过不写 bots.json.
+  console.log('\n校验凭证（取 tenant_access_token）…');
+  const { validateCredentials } = await import('./setup/verify-permissions.js');
+  const v = await validateCredentials(creds.appId, creds.appSecret, creds.brand);
+  if (!v.ok) {
+    console.log(`\n❌ 凭证校验失败 (${v.error}): ${v.message}`);
+    console.log('   不写 bots.json。请重新运行 botmux setup。');
+    return null;
+  }
+  console.log('✅ 凭证有效（tenant_access_token 已成功获取）\n');
+
+  console.log('支持的 CLI: 1) claude-code  2) aiden  3) coco  4) codex  5) gemini  6) opencode');
   const cliChoice = await ask(rl, 'CLI 适配器 [1]: ');
   const cliIdMap: Record<string, string> = { '1': 'claude-code', '2': 'aiden', '3': 'coco', '4': 'codex', '5': 'gemini', '6': 'opencode' };
   const cliId = cliIdMap[cliChoice] ?? (cliChoice || 'claude-code');
   const workingDir = await ask(rl, '默认工作目录 [~]: ');
   const allowedUsers = await ask(rl, '允许的用户 (邮箱或 open_id，逗号分隔，留空=不限制): ');
 
-  const bot: Record<string, any> = { larkAppId: appId, larkAppSecret: appSecret, cliId };
+  const bot: Record<string, any> = { larkAppId: creds.appId, larkAppSecret: creds.appSecret, cliId };
   if (workingDir) bot.workingDir = workingDir;
   if (allowedUsers) bot.allowedUsers = allowedUsers.split(',').map((s: string) => s.trim()).filter(Boolean);
 
@@ -210,20 +292,26 @@ function parseDotEnvToBotConfig(): Record<string, any> {
   return bot;
 }
 
-/** Write single-bot config to bots.json (fresh install or reconfigure) */
-async function writeSingleBotConfig(): Promise<void> {
-  console.log('── 飞书应用配置 ──\n');
-  printLarkPermissions();
-
+/**
+ * 收集一个机器人配置并写盘 (单机器人 fresh install / 重新配置).
+ *
+ * 失败路径 (扫码取消 / 凭证校验不通过): 不创建任何配置文件, 不动旧 .env.
+ * Codex review 边界 #2: 中途失败一律不留半截 JSON.
+ */
+async function writeSingleBotConfig(): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const bot = await promptBotConfig(rl);
   rl.close();
 
-  writeFileSync(BOTS_JSON_FILE, JSON.stringify([bot], null, 2) + '\n');
+  if (!bot) return false;
+
+  writeBotsJsonAtomic([bot]);
   console.log(`\n✅ 配置已写入: ${BOTS_JSON_FILE}`);
-  console.log(`\n下一步:`);
-  console.log(`  1. botmux start              启动 daemon（飞书后台配长连接前必须先启动）`);
+  printRemainingSteps(bot.larkAppId, 'feishu');
+  console.log(`下一步:`);
+  console.log(`  1. botmux start              启动 daemon`);
   console.log(`  2. botmux autostart enable   注册开机自启（推荐：${process.platform === 'darwin' ? 'mac launchd' : process.platform === 'linux' ? 'linux user systemd' : '当前平台暂不支持'}，无需 sudo）`);
+  return true;
 }
 
 // ─── Commands ────────────────────────────────────────────────────────────────
@@ -251,27 +339,35 @@ async function cmdSetup(): Promise<void> {
     const action = await ask(rl, '操作: 1) 添加新机器人  2) 重新配置  (1/2) [1]: ');
 
     if (action === '2') {
-      renameSync(BOTS_JSON_FILE, BOTS_JSON_FILE + '.bak');
-      console.log(`旧配置已备份: ${BOTS_JSON_FILE}.bak\n`);
       console.log('\n── 重新配置 ──\n');
-      printLarkPermissions();
       const newBot = await promptBotConfig(rl);
       rl.close();
-      writeFileSync(BOTS_JSON_FILE, JSON.stringify([newBot], null, 2) + '\n');
-      console.log(`\n✅ 配置已写入: ${BOTS_JSON_FILE}`);
-      console.log(`\n下一步: botmux restart`);
+      if (!newBot) {
+        console.log('\n⚠️  setup 中止，旧配置保留不动。');
+        return;
+      }
+      // 配置成功后才备份旧文件 + 写新文件. 失败不动 bots.json.
+      renameSync(BOTS_JSON_FILE, BOTS_JSON_FILE + '.bak');
+      console.log(`旧配置已备份: ${BOTS_JSON_FILE}.bak`);
+      writeBotsJsonAtomic([newBot]);
+      console.log(`✅ 配置已写入: ${BOTS_JSON_FILE}`);
+      printRemainingSteps(newBot.larkAppId, 'feishu');
+      console.log(`下一步: botmux restart\n`);
       return;
     }
 
     console.log('\n── 添加新机器人 ──\n');
-    printLarkPermissions();
     const newBot = await promptBotConfig(rl);
     rl.close();
-    bots.push(newBot);
-    writeFileSync(BOTS_JSON_FILE, JSON.stringify(bots, null, 2) + '\n');
-    console.log(`\n✅ 已添加机器人 ${newBot.larkAppId}，共 ${bots.length} 个`);
+    if (!newBot) {
+      console.log('\n⚠️  setup 中止，bots.json 不动。');
+      return;
+    }
+    writeBotsJsonAtomic([...bots, newBot]);
+    console.log(`\n✅ 已添加机器人 ${newBot.larkAppId}，共 ${bots.length + 1} 个`);
     console.log(`   配置文件: ${BOTS_JSON_FILE}`);
-    console.log(`\n下一步: botmux restart`);
+    printRemainingSteps(newBot.larkAppId, 'feishu');
+    console.log(`下一步: botmux restart\n`);
 
   } else if (hasEnv) {
     // --- Single-bot mode (.env exists) ---
@@ -281,9 +377,11 @@ async function cmdSetup(): Promise<void> {
 
     if (action === '2') {
       rl.close();
-      await writeSingleBotConfig();
-      renameSync(ENV_FILE, ENV_FILE + '.bak');
-      console.log(`   旧 .env 已备份: ${ENV_FILE}.bak`);
+      const ok = await writeSingleBotConfig();
+      if (ok) {
+        renameSync(ENV_FILE, ENV_FILE + '.bak');
+        console.log(`   旧 .env 已备份: ${ENV_FILE}.bak`);
+      }
       return;
     }
 
@@ -297,17 +395,21 @@ async function cmdSetup(): Promise<void> {
     }
     console.log(`\n当前机器人: ${existingBot.larkAppId} (${existingBot.cliId ?? 'claude-code'})`);
     console.log('\n── 添加新机器人 ──\n');
-    printLarkPermissions();
     const newBot = await promptBotConfig(rl);
     rl.close();
+    if (!newBot) {
+      console.log('\n⚠️  setup 中止，.env 和 bots.json 都不动。');
+      return;
+    }
 
-    const bots = [existingBot, newBot];
-    writeFileSync(BOTS_JSON_FILE, JSON.stringify(bots, null, 2) + '\n');
+    // 写新文件成功后才备份 .env. 失败不动两边.
+    writeBotsJsonAtomic([existingBot, newBot]);
     renameSync(ENV_FILE, ENV_FILE + '.bak');
     console.log(`\n✅ 已迁移到多机器人配置`);
     console.log(`   配置文件: ${BOTS_JSON_FILE}`);
     console.log(`   旧配置已备份: ${ENV_FILE}.bak`);
-    console.log(`\n下一步: botmux restart`);
+    printRemainingSteps(newBot.larkAppId, 'feishu');
+    console.log(`下一步: botmux restart\n`);
 
   } else {
     // --- Fresh install ---
@@ -390,6 +492,40 @@ async function cmdStart(): Promise<void> {
   ensureConfigDir();
   preflightNodeSanity();
   await ensureSystemDependencies();
+
+  // 启动前快速校验每个 bot 的凭证. Codex review 边界 #5: 凭证无效是
+  // 唯一应该阻塞 start 的情况; scope/event 缺失在 daemon 起来后用 WARN
+  // + 私信处理 (event-dispatcher.checkRequiredScopes).
+  //
+  // 失败时打印明确的 appId 前缀和错误码, 不打印 secret, 不 spawn pm2 进程.
+  const botsForCheck = loadBotsJson();
+  if (botsForCheck.length > 0) {
+    const { validateCredentials } = await import('./setup/verify-permissions.js');
+    const invalid: Array<{ appId: string; reason: string }> = [];
+    for (const b of botsForCheck) {
+      if (!b.larkAppId || !b.larkAppSecret) {
+        invalid.push({ appId: b.larkAppId || '(空 appId)', reason: 'larkAppId/larkAppSecret 缺失' });
+        continue;
+      }
+      const v = await validateCredentials(b.larkAppId, b.larkAppSecret, 'feishu');
+      if (!v.ok) {
+        if (v.error === 'invalid_credentials') {
+          invalid.push({ appId: b.larkAppId, reason: v.message });
+        } else {
+          // network / unknown — 不应该拦下启动, 走 WARN
+          console.warn(`⚠️  [${b.larkAppId}] 启动前凭证验证未成功（${v.error}）: ${v.message}`);
+          console.warn(`   daemon 仍会启动；启动后 dispatcher 会自行重试。`);
+        }
+      }
+    }
+    if (invalid.length > 0) {
+      console.error('\n❌ 以下机器人凭证无效，botmux start 中止：\n');
+      for (const e of invalid) console.error(`   - ${e.appId}: ${e.reason}`);
+      console.error('\n   修复方式: 运行 `botmux setup` 选 "重新配置" 重新走扫码/手动流程。');
+      process.exit(1);
+    }
+  }
+
   cleanupLegacyPm2();
   const cfg = ecosystemConfig();
   runPm2(['start', cfg]);

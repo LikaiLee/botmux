@@ -71,13 +71,19 @@ Compared to OpenClaw-style approaches built on Agent SDKs:
 
 ## 5-Minute Setup
 
+> 💡 **TL;DR**: run `botmux setup` and pick "scan-to-create" to finish Steps 1+2 in one shot (the official `@larksuiteoapi/node-sdk` device flow gives you the AppID/AppSecret). Steps 3–6 (permissions, event subscription, publish) still need clicks in the Open Platform console — Lark hasn't exposed write APIs for those. The setup wizard prints deep-links to each remaining step.
+
 ### Step 1: Create a Lark App
 
-Go to the [Lark Open Platform](https://open.larkoffice.com/app) and click "Create Custom App".
+**Recommended**: `botmux setup` → pick "1) Scan-to-create app". Scan with the Lark mobile app and the AppID/AppSecret are persisted automatically; no manual browser navigation. Falls back to manual paste on cancel/timeout/network error.
+
+**Manual**: go to the [Lark Open Platform](https://open.larkoffice.com/app) and click "Create Custom App".
 
 ![Create App](docs/setup/create-app.png)
 
 ### Step 2: Get Credentials
+
+> The scan-to-create path completes this step automatically; skip to Step 3.
 
 Open the app details page → "Credentials & Basic Info", and copy the **App ID** and **App Secret**.
 
@@ -123,10 +129,12 @@ Go to "Permissions & Scopes" → "Batch Import/Export", and paste the following 
 # Install
 npm install -g botmux
 
-# Interactive setup — enter the App ID and App Secret from Step 2
+# Interactive setup — pick "1) Scan-to-create app" or "2) Paste AppID/Secret manually".
+# Credentials are validated with a tenant_access_token call before bots.json is written.
 botmux setup
 
 # Start (must be running before configuring WebSocket subscription — Lark checks for an active connection)
+# Re-validates credentials before forking workers; missing scopes/events only WARN, do not block the daemon.
 botmux start
 ```
 
