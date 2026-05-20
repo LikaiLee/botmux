@@ -1,8 +1,8 @@
 import { existsSync, statSync, openSync, readSync, closeSync } from 'node:fs';
-import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { resolveCommand } from './registry.js';
 import { BOTMUX_SHELL_HINTS } from './shared-hints.js';
+import { cocoCacheRoot } from '../../services/coco-paths.js';
 import type { CliAdapter, PtyHandle } from './types.js';
 
 /** Global submit log — CoCo appends one JSON line here on every successful
@@ -11,9 +11,7 @@ import type { CliAdapter, PtyHandle } from './types.js';
  *  the Codex adapter uses ~/.codex/history.jsonl: write → poll for our
  *  marker → retry Enter if missing → return {submitted:false, recheck}
  *  on final failure so worker can surface a Lark warning. */
-const HISTORY_PATH = platform() === 'darwin'
-  ? join(homedir(), 'Library', 'Caches', 'coco', 'history.jsonl')
-  : join(homedir(), '.cache', 'coco', 'history.jsonl');
+const HISTORY_PATH = join(cocoCacheRoot(), 'history.jsonl');
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
