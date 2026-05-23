@@ -1114,6 +1114,7 @@ function deliverFinalOutput(
 /** Test-only alias so the retry pipeline can be exercised without a real
  *  fork. Intentionally underscored to discourage non-test callers. */
 export const __testOnly_deliverFinalOutput = deliverFinalOutput;
+export const __testOnly_setupWorkerHandlers = setupWorkerHandlers;
 
 // ─── Fork adopt worker ──────────────────────────────────────────────────────
 
