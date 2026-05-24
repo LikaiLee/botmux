@@ -76,6 +76,14 @@ describe('handleTeamRoute', () => {
     expect(roster.team.memberCount).toBe(1);
   });
 
+  it('serves the team SPA page at GET /team (public)', async () => {
+    const res = makeRes();
+    expect(await call(makeReq('GET', '/team'), res, '/team')).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(res._headers['content-type']).toContain('text/html');
+    expect(res._body).toContain('botmux 团队平台');
+  });
+
   it('team APIs require a session (401 without bmx_session)', async () => {
     const res = makeRes();
     await call(makeReq('GET', '/api/team/roster'), res, '/api/team/roster');

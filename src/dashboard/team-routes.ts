@@ -16,6 +16,7 @@ import { getWebSession, revokeWebSession, type WebSession } from '../services/we
 import { buildTeamRoster } from '../services/team-roster.js';
 import { listConnectors } from '../services/connector-store.js';
 import { listTriggerLogs, summarizeTriggerLogs, type TriggerLogListOptions } from '../services/trigger-log-store.js';
+import { TEAM_PAGE_HTML } from './team-page.js';
 
 export interface TeamRouteDeps {
   dataDir?: string;
@@ -62,10 +63,17 @@ export async function handleTeamRoute(
   deps: TeamRouteDeps = {},
 ): Promise<boolean> {
   const path = url.pathname;
-  if (!path.startsWith('/api/pairing/') && !path.startsWith('/api/team/')) return false;
+  if (path !== '/team' && !path.startsWith('/api/pairing/') && !path.startsWith('/api/team/')) return false;
 
   const dataDir = deps.dataDir ?? config.session.dataDir;
   const method = req.method ?? 'GET';
+
+  // Team platform SPA (public page; self-authenticates via the pairing flow).
+  if (path === '/team' && method === 'GET') {
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(TEAM_PAGE_HTML);
+    return true;
+  }
   const cookies = parseCookies(req.headers.cookie);
   const sessionOf = (): WebSession | null => getWebSession(dataDir, cookies[SESSION_COOKIE] ?? '');
 
