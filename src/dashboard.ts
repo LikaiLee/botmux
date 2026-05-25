@@ -171,8 +171,8 @@ async function proxyToDaemon(
  *  selected bots, proxy to its /api/groups/create, invite the requesting user.
  *  Surfaces invalidBotIds/invalidUserIds so the UI never implies a non-added
  *  bot/user joined. */
-async function createTeamGroup(args: { name: string; larkAppIds: string[]; userOpenId?: string; preferredCreator?: string }): Promise<{
-  ok: boolean; chatId?: string; shareLink?: string; invalidBotIds?: string[]; invalidUserIds?: string[]; error?: string; autoInviteUnavailable?: boolean;
+async function createTeamGroup(args: { name: string; larkAppIds: string[]; userOpenId?: string; preferredCreator?: string; ownerUnionIds?: string[] }): Promise<{
+  ok: boolean; chatId?: string; shareLink?: string; invalidBotIds?: string[]; invalidUserIds?: string[]; invalidOwnerUnionIds?: string[]; error?: string; autoInviteUnavailable?: boolean;
 }> {
   const selectedIds = Array.from(new Set(args.larkAppIds.filter(Boolean)));
   if (selectedIds.length === 0) return { ok: false, error: 'no_bots_selected' };
@@ -197,7 +197,7 @@ async function createTeamGroup(args: { name: string; larkAppIds: string[]; userO
     const upstream = await proxyToDaemon(plan.creatorLarkAppId, '/api/groups/create', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: args.name, larkAppIds: selectedIds, userOpenIds }),
+      body: JSON.stringify({ name: args.name, larkAppIds: selectedIds, userOpenIds, ownerUnionIds: args.ownerUnionIds ?? [] }),
     });
     const text = await upstream.text();
     let parsed: any = null;
@@ -205,7 +205,7 @@ async function createTeamGroup(args: { name: string; larkAppIds: string[]; userO
     if (!upstream.ok || !parsed?.ok || typeof parsed.chatId !== 'string') {
       return { ok: false, error: parsed?.error ?? `group_create_http_${upstream.status}` };
     }
-    return { ok: true, chatId: parsed.chatId, shareLink: typeof parsed.shareLink === 'string' ? parsed.shareLink : undefined, invalidBotIds: parsed.invalidBotIds ?? [], invalidUserIds: parsed.invalidUserIds ?? [], autoInviteUnavailable: !plan.inviteUser };
+    return { ok: true, chatId: parsed.chatId, shareLink: typeof parsed.shareLink === 'string' ? parsed.shareLink : undefined, invalidBotIds: parsed.invalidBotIds ?? [], invalidUserIds: parsed.invalidUserIds ?? [], invalidOwnerUnionIds: parsed.invalidOwnerUnionIds ?? [], autoInviteUnavailable: !plan.inviteUser };
   } catch {
     return { ok: false, error: 'group_create_proxy_failed' };
   }

@@ -21,6 +21,10 @@ export interface FederatedBot {
   botUnionId?: string;
   capability?: string | null;
   hasTeamRole?: boolean;
+  /** Owner (the person) of this bot, tenant-stable union_id — so 拉群 can pull
+   *  the owner into the group by union_id (open_id is app-scoped, union_id not). */
+  ownerUnionId?: string;
+  ownerName?: string;
 }
 
 export interface FederatedDeployment {

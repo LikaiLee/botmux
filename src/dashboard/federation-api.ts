@@ -60,6 +60,8 @@ function sanitizeBots(input: unknown): FederatedBot[] {
       botUnionId: typeof r.botUnionId === 'string' ? r.botUnionId : undefined,
       capability: typeof r.capability === 'string' ? r.capability : null,
       hasTeamRole: !!r.hasTeamRole,
+      ownerUnionId: typeof r.ownerUnionId === 'string' ? r.ownerUnionId : undefined,
+      ownerName: typeof r.ownerName === 'string' ? r.ownerName : undefined,
     });
   }
   return out;

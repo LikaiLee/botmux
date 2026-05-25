@@ -289,3 +289,32 @@ export async function addBotToChat(
   }
   return out;
 }
+
+/**
+ * Add USERS to an existing chat by **union_id** (tenant-stable, NOT app-scoped
+ * like open_id). Used to pull bot owners into a federated group regardless of
+ * which bot they paired through. Returns the union_ids Lark could not add.
+ * Best-effort: total failure reports all ids invalid.
+ *
+ * Uses /open-apis/im/v1/chats/:chat_id/members with member_id_type=union_id.
+ */
+export async function addUsersToChatByUnionId(
+  proxyLarkAppId: string,
+  chatId: string,
+  unionIds: string[],
+): Promise<{ invalidUserIds: string[] }> {
+  const ids = Array.from(new Set(unionIds.filter(Boolean)));
+  if (ids.length === 0) return { invalidUserIds: [] };
+  const client = getBotClient(proxyLarkAppId);
+  try {
+    const res: any = await (client as any).im.v1.chatMembers.create({
+      path: { chat_id: chatId },
+      params: { member_id_type: 'union_id' },
+      data: { id_list: ids },
+    });
+    if (res.code !== 0 && res.code !== undefined) return { invalidUserIds: ids };
+    return { invalidUserIds: res.data?.invalid_id_list ?? [] };
+  } catch {
+    return { invalidUserIds: ids };
+  }
+}

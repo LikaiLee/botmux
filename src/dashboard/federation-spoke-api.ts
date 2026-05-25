@@ -82,7 +82,10 @@ function localBots(dataDir: string): FederatedBot[] {
     cliId: b.cliId,
     capability: b.capability,
     hasTeamRole: b.hasTeamRole,
-    // botUnionId: resolved in P2 (needed for cross-app 拉群), best-effort/omitted now
+    // owner (union_id+name) federated so the hub can pull owners into 拉群
+    ownerUnionId: b.owner?.unionId,
+    ownerName: b.owner?.name,
+    // botUnionId: not needed — 拉群 adds bots by app_id (larkAppId), see docs
   }));
 }
 
@@ -108,8 +111,8 @@ export interface FederationSpokeDeps {
   fetcher?: Fetcher;
   /** Injected by dashboard.ts — picks a local online creator + proxies to its
    *  daemon's /api/groups/create (federated bots are added by larkAppId). */
-  createTeamGroup?: (args: { name: string; larkAppIds: string[] }) => Promise<{
-    ok: boolean; chatId?: string; shareLink?: string; invalidBotIds?: string[]; error?: string;
+  createTeamGroup?: (args: { name: string; larkAppIds: string[]; ownerUnionIds?: string[] }) => Promise<{
+    ok: boolean; chatId?: string; shareLink?: string; invalidBotIds?: string[]; invalidOwnerUnionIds?: string[]; error?: string;
   }>;
 }
 
@@ -139,10 +142,16 @@ export async function handleFederationSpokeApi(
     const name = (String(body?.name ?? '').trim()) || '协作群';
     if (larkAppIds.length === 0) { jsonRes(res, 400, { ok: false, error: 'no_bots_selected' }); return true; }
     // Only bots on the aggregated roster (local + federated) — block bad ids.
-    const rosterIds = new Set(buildFederatedRoster(dataDir, DEFAULT_TEAM_ID).bots.map(b => b.larkAppId));
-    const unknown = larkAppIds.filter(id => !rosterIds.has(id));
+    const roster = buildFederatedRoster(dataDir, DEFAULT_TEAM_ID);
+    const rosterById = new Map(roster.bots.map(b => [b.larkAppId, b]));
+    const unknown = larkAppIds.filter(id => !rosterById.has(id));
     if (unknown.length) { jsonRes(res, 400, { ok: false, error: 'unknown_bot', unknown }); return true; }
-    const r = await deps.createTeamGroup({ name, larkAppIds });
+    // Pull the OWNERS of the selected bots into the group too (by union_id,
+    // tenant-stable — works across deployments/app scopes).
+    const ownerUnionIds = Array.from(new Set(
+      larkAppIds.map(id => rosterById.get(id)?.owner?.unionId).filter((u): u is string => !!u),
+    ));
+    const r = await deps.createTeamGroup({ name, larkAppIds, ownerUnionIds });
     jsonRes(res, r.ok ? 200 : 502, r);
     return true;
   }

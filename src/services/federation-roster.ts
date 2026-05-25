@@ -23,6 +23,9 @@ export interface AggregatedRosterBot {
   hasTeamRole: boolean;
   /** Tenant-stable bot id (kept now so P2 拉群 by union_id needs no schema change). */
   botUnionId?: string;
+  /** Owner (person) of this bot — union_id is tenant-stable, used to pull the
+   *  owner into a federated group regardless of app scope. */
+  owner?: { unionId?: string; name?: string };
   deployment: { id: string; name: string; local: boolean; stale: boolean };
 }
 
@@ -57,6 +60,7 @@ export function buildFederatedRoster(dataDir: string, teamId: string = DEFAULT_T
     cliId: b.cliId,
     capability: b.capability,
     hasTeamRole: b.hasTeamRole,
+    owner: b.owner ? { unionId: b.owner.unionId, name: b.owner.name } : undefined,
     deployment: { id: localId.deploymentId, name: localId.name, local: true, stale: false },
   }));
 
@@ -71,6 +75,7 @@ export function buildFederatedRoster(dataDir: string, teamId: string = DEFAULT_T
         capability: b.capability ?? null,
         hasTeamRole: !!b.hasTeamRole,
         botUnionId: b.botUnionId,
+        owner: (b.ownerUnionId || b.ownerName) ? { unionId: b.ownerUnionId, name: b.ownerName } : undefined,
         deployment: { id: dep.deploymentId, name: dep.name, local: false, stale },
       });
     }

@@ -521,6 +521,7 @@ ipcRoute('POST', '/api/groups/create', async (req, res) => {
     name?: unknown;
     larkAppIds?: unknown;
     userOpenIds?: unknown;
+    ownerUnionIds?: unknown;
     transferOwnerTo?: unknown;
     notifyOwnerOpenId?: unknown;
     bindWorkingDir?: unknown;
@@ -530,6 +531,7 @@ ipcRoute('POST', '/api/groups/create', async (req, res) => {
       name?: string;
       larkAppIds?: string[];
       userOpenIds?: string[];
+      ownerUnionIds?: string[];
       transferOwnerTo?: string;
       notifyOwnerOpenId?: string;
       bindWorkingDir?: string;
@@ -547,6 +549,10 @@ ipcRoute('POST', '/api/groups/create', async (req, res) => {
   // dashboard/operator-selector.ts).
   const userIds = Array.isArray(body.userOpenIds) && body.userOpenIds.every(x => typeof x === 'string')
     ? (body.userOpenIds as string[])
+    : [];
+  // Owner union_ids (tenant-stable) to pull bot owners into a federated group.
+  const ownerUnionIds = Array.isArray(body.ownerUnionIds) && body.ownerUnionIds.every(x => typeof x === 'string')
+    ? (body.ownerUnionIds as string[])
     : [];
   const transferTo = typeof body.transferOwnerTo === 'string' && body.transferOwnerTo.trim()
     ? body.transferOwnerTo.trim()
@@ -567,6 +573,7 @@ ipcRoute('POST', '/api/groups/create', async (req, res) => {
       larkAppIds: body.larkAppIds as string[],
       name,
       userOpenIds: userIds,
+      ownerUnionIds,
       transferOwnerTo: transferTo ?? undefined,
       notifyOwnerOpenId: notifyTo ?? undefined,
       bindWorkingDir: bindWorkingDir || undefined,
