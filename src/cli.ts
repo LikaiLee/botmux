@@ -2830,13 +2830,22 @@ async function cmdSend(rest: string[]): Promise<void> {
     // --no-mention 显式不 @ 任何人 → 连 footer 的"发送给/cc"寻址 <at> 也清空，
     // 否则 footer 仍会 @ 人，与 --no-mention 语义和"未@任何人"输出自相矛盾
     // （Codex review P2）。--top-level 同样无特定收件人。
-    const footerAddressing = (sendTopLevel || noMention)
+    const footerAddressingRaw = (sendTopLevel || noMention)
       ? { sendTo: undefined as string | undefined, cc: [] as string[] }
       : buildFooterAddressing(s, {
           isOncall: !!oncallEntry,
           hasExplicitBotMention: explicitKnownBotMention,
           knownBotOpenIds,
         });
+    // De-dupe vs body @: if someone is already @'d in the body (典型是
+    // --mention-back @ 了触发者，而 footer 的"发送给"又指向同一个 owner/caller)，
+    // 从 footer 去掉，避免一条消息里出现两个相同的 @。
+    const bodyMentionIds = new Set(mentions.map(m => m.open_id));
+    const footerAddressing = {
+      sendTo: footerAddressingRaw.sendTo && !bodyMentionIds.has(footerAddressingRaw.sendTo)
+        ? footerAddressingRaw.sendTo : undefined,
+      cc: footerAddressingRaw.cc.filter(id => !bodyMentionIds.has(id)),
+    };
 
     // Decide: interactive card (renders markdown) vs. post (plain text).
     // Explicit --card / --text wins; otherwise auto-detect markdown syntax.
