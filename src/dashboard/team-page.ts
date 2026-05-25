@@ -11,38 +11,52 @@ export const TEAM_PAGE_HTML = `<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>botmux 团队平台</title>
 <style>
-  :root { color-scheme: light dark; }
-  body { font: 15px/1.5 -apple-system, system-ui, "PingFang SC", sans-serif; margin: 0; background: #f6f7f9; color: #1f2329; }
-  header { padding: 14px 20px; background: #1f2329; color: #fff; display: flex; justify-content: space-between; align-items: center; }
+  html { color-scheme: light; }
+  html[data-theme="dark"] { color-scheme: dark; }
+  :root {
+    --bg:#f6f7f9; --card:#fff; --text:#1f2329; --heading:#4e5969; --muted:#86909c;
+    --border:#e5e6eb; --border2:#f0f1f3; --input-bg:#fff; --input-border:#d0d3d9;
+    --code-bg:#f2f3f5; --grp-bg:#f6f7f9; --header-bg:#1f2329; --tag-bg:#e8f3ff;
+  }
+  html[data-theme="dark"] {
+    --bg:#17171a; --card:#212127; --text:#e8e9eb; --heading:#c9ccd1; --muted:#9298a0;
+    --border:#34353c; --border2:#2b2c32; --input-bg:#2a2b31; --input-border:#3a3b43;
+    --code-bg:#2a2b31; --grp-bg:#2a2b31; --header-bg:#0e0e11; --tag-bg:#16335a;
+  }
+  body { font: 15px/1.5 -apple-system, system-ui, "PingFang SC", sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  header { padding: 14px 20px; background: var(--header-bg); color: #fff; display: flex; justify-content: space-between; align-items: center; }
   header b { font-size: 16px; }
+  .topbar-r { display: flex; gap: 14px; align-items: center; }
+  #theme-toggle { background: transparent; border: 1px solid rgba(255,255,255,.3); color: #fff; padding: 4px 10px; }
   main { max-width: 920px; margin: 0 auto; padding: 20px; }
-  .card { background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
-  h2 { font-size: 15px; margin: 0 0 12px; color: #4e5969; }
-  .code { font: 28px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 4px; background: #f2f3f5; padding: 12px 16px; border-radius: 8px; display: inline-block; }
-  button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid #d0d3d9; background: #fff; cursor: pointer; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px 20px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; color: var(--heading); }
+  .code { font: 28px/1.2 ui-monospace, Menlo, monospace; letter-spacing: 4px; background: var(--code-bg); color: var(--text); padding: 12px 16px; border-radius: 8px; display: inline-block; }
+  button { font: inherit; padding: 8px 16px; border-radius: 8px; border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text); cursor: pointer; }
   button.primary { background: #3370ff; color: #fff; border-color: #3370ff; }
+  input, select, textarea { background: var(--input-bg); color: var(--text); border: 1px solid var(--input-border); border-radius: 6px; }
   table { width: 100%; border-collapse: collapse; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #f0f1f3; }
-  th { color: #86909c; font-weight: 500; }
-  .tag { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #e8f3ff; color: #3370ff; }
-  .muted { color: #86909c; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border2); }
+  th { color: var(--muted); font-weight: 500; }
+  .tag { font-size: 12px; padding: 2px 8px; border-radius: 10px; background: var(--tag-bg); color: #3370ff; }
+  .muted { color: var(--muted); }
   .ok { color: #00b42a; } .err { color: #f53f3f; }
   .hide { display: none; }
-  .hint { color: #86909c; font-size: 13px; margin-top: 8px; }
-  input.capedit { font: inherit; width: 92%; padding: 4px 8px; border: 1px solid #e5e6eb; border-radius: 6px; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 8px; }
+  input.capedit { font: inherit; width: 92%; padding: 4px 8px; }
   input.capedit:focus { border-color: #3370ff; outline: none; }
-  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.4); display: flex; align-items: center; justify-content: center; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.5); display: flex; align-items: center; justify-content: center; }
   /* .overlay sets display:flex; this compound selector must win over it so a
      hidden overlay stays hidden (plain .hide has equal specificity and loses
      to the later .overlay rule). */
   .overlay.hide { display: none; }
-  .modal { background: #fff; border-radius: 10px; padding: 18px 20px; width: min(560px, 92vw); }
-  .modal textarea { width: 100%; min-height: 200px; font: 13px/1.5 ui-monospace, Menlo, monospace; padding: 10px; border: 1px solid #e5e6eb; border-radius: 8px; box-sizing: border-box; }
+  .modal { background: var(--card); color: var(--text); border-radius: 10px; padding: 18px 20px; width: min(560px, 92vw); }
+  .modal textarea { width: 100%; min-height: 200px; font: 13px/1.5 ui-monospace, Menlo, monospace; padding: 10px; box-sizing: border-box; }
   .modal .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
 </style>
 </head>
 <body>
-<header><b>botmux 团队平台</b><span id="who"></span></header>
+<header><b>botmux 团队平台</b><div class="topbar-r"><button id="theme-toggle">🌙 暗色</button><span id="who"></span></div></header>
 <main>
   <!-- Login -->
   <section id="login" class="card hide">
@@ -130,6 +144,26 @@ export const TEAM_PAGE_HTML = `<!doctype html>
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// Theme: explicit choice persisted to localStorage, else follow OS preference.
+// data-theme on <html> drives both our CSS vars and color-scheme (so UA-rendered
+// form controls match the cards instead of staying dark on a light page).
+const THEME_KEY = 'bmx-team-theme';
+function applyTheme(t){
+  document.documentElement.dataset.theme = t === 'dark' ? 'dark' : '';
+  const btn = $('theme-toggle');
+  if (btn) btn.textContent = t === 'dark' ? '☀ 亮色' : '🌙 暗色';
+}
+(function initTheme(){
+  let t = localStorage.getItem(THEME_KEY);
+  if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  applyTheme(t);
+})();
+$('theme-toggle').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  localStorage.setItem(THEME_KEY, next);
+  applyTheme(next);
+};
 async function jget(u){ const r = await fetch(u); return { status:r.status, body: await r.json().catch(()=>({})) }; }
 async function jpost(u, b){ const r = await fetch(u,{method:'POST',headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined}); return { status:r.status, body: await r.json().catch(()=>({})) }; }
 async function jput(u, b){ const r = await fetch(u,{method:'PUT',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})}); return { status:r.status, body: await r.json().catch(()=>({})) }; }
@@ -173,7 +207,7 @@ function renderRoster(){
   let html = '', gi = 0;
   for (const [, g] of ordered) {
     const gid = 'g' + (gi++);
-    html += '<tr class="grp" data-g="'+gid+'" style="cursor:pointer"><td colspan="5" style="background:#f6f7f9"><b>▾ '+esc(g.label)+'</b> <span class="muted">('+g.bots.length+')</span></td></tr>';
+    html += '<tr class="grp" data-g="'+gid+'" style="cursor:pointer"><td colspan="5" style="background:var(--grp-bg)"><b>▾ '+esc(g.label)+'</b> <span class="muted">('+g.bots.length+')</span></td></tr>';
     html += g.bots.map(b => botRow(b, gid)).join('');
   }
   $('roster').innerHTML = html || '<tr><td colspan=5 class=muted>没有符合条件的机器人</td></tr>';
