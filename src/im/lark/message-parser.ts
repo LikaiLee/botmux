@@ -381,6 +381,51 @@ function resolveMentions(text: string, mentions?: RawEventData['message']['menti
   return result.trim();
 }
 
+function normalizeFenceLanguage(lang: unknown): string {
+  return typeof lang === 'string' ? lang.trim().replace(/\s+/g, '_') : '';
+}
+
+function renderPostCodeBlock(node: any): string {
+  const raw = typeof node.text === 'string'
+    ? node.text
+    : typeof node.content === 'string'
+      ? node.content
+      : typeof node.code === 'string'
+        ? node.code
+        : '';
+  const code = raw.replace(/\n+$/, '');
+  const lang = normalizeFenceLanguage(node.language ?? node.lang);
+  const longestFence = Math.max(2, ...[...code.matchAll(/`+/g)].map(m => m[0].length));
+  const fence = '`'.repeat(longestFence + 1);
+  return `\n${fence}${lang}\n${code}\n${fence}\n`;
+}
+
+function renderPostNode(node: any, numberer?: ImgNumberer): string {
+  if (node.tag === 'text') return node.text ?? '';
+  if (node.tag === 'a') return node.text ?? node.href ?? '';
+  if (node.tag === 'at') return `@${node.user_name ?? 'unknown'}`;
+  if (node.tag === 'code_block') return renderPostCodeBlock(node);
+  if (node.tag === 'img' || node.tag === 'media') {
+    const key = node.image_key ?? node.file_key;
+    if (key && numberer) return `[图片 ${numberer.assign(`image:${key}`).num}]`;
+    return '[图片]';
+  }
+  if (node.tag === 'file') {
+    const key = node.file_key;
+    const name = node.file_name ?? '';
+    if (key && numberer) {
+      const n = numberer.assign(`file:${key}`).num;
+      return name ? `[文件 ${n}: ${name}]` : `[文件 ${n}]`;
+    }
+    return name ? `[文件: ${name}]` : '[文件]';
+  }
+  return '';
+}
+
+function joinPostNodeText(parts: string[]): string {
+  return parts.join('').replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function extractTextContent(msgType: string, rawContent: string, mentions?: RawEventData['message']['mentions'], numberer?: ImgNumberer): string {
   try {
     if (msgType === 'text') {
@@ -393,32 +438,7 @@ function extractTextContent(msgType: string, rawContent: string, mentions?: RawE
       const body = content
         .map((paragraph: any[]) => {
           const nodes = Array.isArray(paragraph) ? paragraph : [paragraph];
-          return nodes
-            .map((node: any) => {
-              if (node.tag === 'text') return node.text ?? '';
-              if (node.tag === 'a') return node.text ?? node.href ?? '';
-              if (node.tag === 'at') return `@${node.user_name ?? 'unknown'}`;
-              // Render img/media tags as a placeholder. Without this fallback,
-              // a post message with images surfaces as text-only — which lets
-              // a reader (e.g. another bot scanning thread history) believe
-              // no image was attached and prompt the sender to retry.
-              if (node.tag === 'img' || node.tag === 'media') {
-                const key = node.image_key ?? node.file_key;
-                if (key && numberer) return `[图片 ${numberer.assign(`image:${key}`).num}]`;
-                return '[图片]';
-              }
-              if (node.tag === 'file') {
-                const key = node.file_key;
-                const name = node.file_name ?? '';
-                if (key && numberer) {
-                  const n = numberer.assign(`file:${key}`).num;
-                  return name ? `[文件 ${n}: ${name}]` : `[文件 ${n}]`;
-                }
-                return name ? `[文件: ${name}]` : '[文件]';
-              }
-              return '';
-            })
-            .join('');
+          return joinPostNodeText(nodes.map((node: any) => renderPostNode(node, numberer)));
         })
         .filter(Boolean)
         .join('\n');
