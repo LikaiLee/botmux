@@ -107,8 +107,8 @@ export function hasKnownBotMention(
  *
  * The footer is an implicit convenience for human readers. It must not wake a
  * bot: bot-to-bot routing should be explicit in the message body/--mention.
- * When the body already contains an explicit bot target, adding a second footer
- * target can wake the previous bot and cross-wire independent sessions.
+ * When the body already contains an explicit bot target, keep the footer on a
+ * human owner if one exists; only bot recipients are suppressed.
  */
 export function buildFooterAddressing(
   s: { ownerOpenId?: string; lastCallerOpenId?: string },
@@ -122,13 +122,12 @@ export function buildFooterAddressing(
   const botIds = opts.knownBotOpenIds ?? new Set<string>();
   const ownerHuman = owner && !botIds.has(owner) ? owner : undefined;
 
-  if (opts.hasExplicitBotMention) return { sendTo: undefined, cc: [] };
   if (!opts.isOncall) return { sendTo: ownerHuman, cc: [] };
 
   const caller = s.lastCallerOpenId ?? owner;
   const callerIsBot = !!caller && botIds.has(caller);
 
-  if (callerIsBot) {
+  if (opts.hasExplicitBotMention || callerIsBot) {
     return { sendTo: ownerHuman, cc: [] };
   }
 
