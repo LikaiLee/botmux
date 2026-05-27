@@ -7,7 +7,7 @@ import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { ensureSkills, ensureAskSkill } from '../skills/installer.js';
+import { ensureSkills, ensureAskSkill, ensurePluginSkills, removeGlobalBotmuxSkills } from '../skills/installer.js';
 import { installHook } from '../adapters/hook-installer.js';
 import { hookCommandFor } from '../adapters/hook-command.js';
 import { randomBytes } from 'node:crypto';
@@ -492,7 +492,15 @@ const skillsInstalledCliIds = new Set<string>();
 export function ensureCliSkills(cliId: CliId, cliPathOverride?: string): void {
   if (skillsInstalledCliIds.has(cliId)) return;
   const adapter = createCliAdapterSync(cliId, cliPathOverride);
-  ensureSkills(cliId, adapter.skillsDir);
+  if (adapter.pluginDir) {
+    // 动态注入：skill 写进插件目录，spawn 时用 --plugin-dir 注入，仅本次会话可见。
+    // 不再写全局 skillsDir，并清掉早期版本残留在 ~/.claude/skills 的 botmux-* 目录，
+    // 避免泄漏进用户独立开的 CLI 会话。
+    ensurePluginSkills(cliId, adapter.pluginDir);
+    removeGlobalBotmuxSkills('~/.claude/skills');
+  } else {
+    ensureSkills(cliId, adapter.skillsDir);
+  }
   // askUserQuestion 接管策略：hook 优先 + 非 hook CLI 用 skill 兜底。
   // - asksViaHook=true（Claude/OpenCode）：通过 hook 拦截原生 AskUserQuestion，删掉
   //   botmux-ask skill，避免 skill 与 hook 双重弹卡。
@@ -503,7 +511,9 @@ export function ensureCliSkills(cliId: CliId, cliPathOverride?: string): void {
     try { installHook(cliId, adapter.hookInstall, hookCommandFor(cliId)); }
     catch (err) { logger.warn(`[hook] install failed for ${cliId}: ${err instanceof Error ? err.message : String(err)}`); }
   }
-  ensureAskSkill(cliId, adapter.skillsDir, !adapter.asksViaHook);
+  // botmux-ask 落在与其它 skill 同一目录：plugin 模式下是 {pluginDir}/skills。
+  const askSkillsDir = adapter.pluginDir ? join(adapter.pluginDir, 'skills') : adapter.skillsDir;
+  ensureAskSkill(cliId, askSkillsDir, !adapter.asksViaHook);
   skillsInstalledCliIds.add(cliId);
 }
 
