@@ -3159,6 +3159,14 @@ body{display:flex;flex-direction:column}
    and momentum here (not just on body), and reserve gestures for pinch-zoom so
    single-finger drag is driven manually by the touch handler below. */
 #terminal .xterm-viewport{overscroll-behavior:none;-webkit-overflow-scrolling:auto;touch-action:pinch-zoom}
+/* On touch, glyph cells are selectable text — a finger-drag over text starts
+   native text selection (and the long-press callout) instead of scrolling,
+   which is why blank areas scroll fine but text areas stall/won't move.
+   Kill selection + callout on the rendered content so every drag is a clean
+   scroll.  Gated to .touch so desktop keeps mouse text-selection for copy. */
+body.touch #terminal .xterm-screen,
+body.touch #terminal .xterm-screen *{
+  -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:pinch-zoom}
 #status{position:fixed;top:8px;right:12px;z-index:10;font:12px monospace;
   color:#565f89;background:#1a1b26cc;padding:2px 8px;border-radius:4px}
 #status.ok{color:#9ece6a}
@@ -3190,7 +3198,7 @@ body{display:flex;flex-direction:column}
 <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-unicode11@0/lib/addon-unicode11.min.js"></script>
 <script>
 var isTouch='ontouchstart'in window||navigator.maxTouchPoints>0;
-if(isTouch)document.getElementById('vp').content='width=1100,viewport-fit=cover';
+if(isTouch){document.getElementById('vp').content='width=1100,viewport-fit=cover';document.body.classList.add('touch');}
 var hasToken=${hasWrite};
 if(!hasToken){var _rb=document.getElementById('readonly-banner');_rb.classList.add('show');_rb.addEventListener('click',function(){_rb.classList.remove('show')});}
 
