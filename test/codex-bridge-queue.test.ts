@@ -115,6 +115,61 @@ describe('CodexBridgeQueue', () => {
     expect(ready.map(t => t.finalText)).toEqual(['first reply', 'second reply']);
   });
 
+  it('Codex steer-merge: user2 steered into active turn before any final → t1 dropped, t2 gets merged final, no wedge', () => {
+    // codex-cli 0.134.0 active-turn steer (verified empirically): when msg1's
+    // turn runs a tool_call, msg2 is steered into the SAME turn and codex emits
+    // ONE merged final answering both. Rollout: user1 → user2 → assistant_final
+    // (no final for t1 before user2). Without HOL-block-drop the single
+    // `collecting` pointer switches to t2, the merged final closes t2, and t1
+    // stays at the queue head with no finalText → drainEmittable() wedges
+    // forever. HOL-drop discards the textless collecting t1 when user2 arrives.
+    const q = new CodexBridgeQueue();
+    q.mark('t1', 'first prompt', 100);
+    q.mark('t2', 'second prompt', 100);  // type-ahead: marked ~immediately
+    q.ingest([
+      userEv('first prompt', 'u1', 5_000),
+      userEv('second prompt', 'u2', 8_000),   // steered in BEFORE any assistant_final
+      asstEv('merged reply', 'a1', 12_000),   // single combined final
+    ]);
+    const ready = q.drainEmittable();
+    expect(ready.map(t => t.turnId)).toEqual(['t2']);   // t1 dropped, t2 emits
+    expect(ready[0].finalText).toBe('merged reply');
+    expect(q.size()).toBe(0);                            // no wedge
+  });
+
+  it('Codex steer-merge with N type-ahead messages: only the last steered turn emits the merged final', () => {
+    // Three messages typed-ahead into one tool-running turn; codex steers all
+    // into the active turn → user1 → user2 → user3 → one merged final. Each new
+    // user event HOL-drops the previous textless collecting turn.
+    const q = new CodexBridgeQueue();
+    q.mark('t1', 'prompt one', 100);
+    q.mark('t2', 'prompt two', 100);
+    q.mark('t3', 'prompt three', 100);
+    q.ingest([
+      userEv('prompt one', 'u1', 5_000),
+      userEv('prompt two', 'u2', 6_000),
+      userEv('prompt three', 'u3', 7_000),
+      asstEv('one combined reply', 'a1', 12_000),
+    ]);
+    const ready = q.drainEmittable();
+    expect(ready.map(t => t.turnId)).toEqual(['t3']);   // t1, t2 dropped
+    expect(ready[0].finalText).toBe('one combined reply');
+    expect(q.size()).toBe(0);
+  });
+
+  it('HOL-drop is gated on freshness: a replayed historical user event does NOT evict a live collecting turn', () => {
+    // A late-attach / replay can feed an OLD user event after a turn is already
+    // collecting. The freshness gate (event ts >= collecting mark) prevents it
+    // from HOL-dropping the live turn, which would lose the in-flight reply.
+    const q = new CodexBridgeQueue();
+    q.mark('t1', 'live prompt', 10_000);
+    q.ingest([userEv('live prompt', 'u-live', 12_000)]);   // t1 started, markTimeMs→12_000
+    q.ingest([userEv('ancient history', 'u-old', 3_000)]); // stale; must NOT drop t1
+    expect(q.peek().some(t => t.turnId === 't1')).toBe(true);
+    q.ingest([asstEv('live reply', 'a-live', 13_000)]);
+    expect(q.drainEmittable().map(t => t.turnId)).toEqual(['t1']);
+  });
+
   it('type-ahead: turn-start overrides markTimeMs to the dequeue-time event timestamp', () => {
     const q = new CodexBridgeQueue();
     q.mark('t1', 'prompt one', 1_000);
@@ -345,5 +400,34 @@ describe('CodexBridgeQueue + bridge-fallback gate (type-ahead suppression window
       { turnId: 't1', suppressed: true },
       { turnId: 't2', suppressed: true },
     ]);
+  });
+
+  it('steer-merge: HOL-dropped t1 leaves t2 a correct suppression window for the single merged send', () => {
+    // codex merged msg1+msg2 into one turn (user1 → user2 → merged final). HOL-
+    // drop discards t1; only t2 drains, its window anchored to user2's dequeue
+    // timestamp. The model's single botmux send for the combined reply lands in
+    // t2's window → suppressed, no duplicate fallback.
+    const q = new CodexBridgeQueue();
+    q.mark('t1', 'first prompt', 1_000);
+    q.mark('t2', 'second prompt', 1_001);
+    q.ingest([
+      userEv('first prompt', 'u1', 5_000),
+      userEv('second prompt', 'u2', 8_000),
+      asstEv('merged reply', 'a1', 15_000),
+    ]);
+    const decisions = emitDecisions(q, [{ sentAtMs: 12_000 }]);
+    expect(decisions).toEqual([{ turnId: 't2', suppressed: true }]);
+  });
+
+  it('steer-merge: HOL-dropped t1, model forgot to send → merged fallback fires once on t2', () => {
+    const q = new CodexBridgeQueue();
+    q.mark('t1', 'first prompt', 1_000);
+    q.mark('t2', 'second prompt', 1_001);
+    q.ingest([
+      userEv('first prompt', 'u1', 5_000),
+      userEv('second prompt', 'u2', 8_000),
+      asstEv('merged reply', 'a1', 15_000),
+    ]);
+    expect(emitDecisions(q, [])).toEqual([{ turnId: 't2', suppressed: false }]);
   });
 });

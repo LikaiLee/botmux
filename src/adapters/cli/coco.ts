@@ -267,8 +267,9 @@ export function createCocoAdapter(pathOverride?: string): CliAdapter {
     // CodexBridgeQueue's single-`collecting` attribution stays correct without
     // the queued_command upgrade Claude needed. The submit log history.jsonl
     // IS written at submit time (even for a queued message), so writeInput's
-    // verification still confirms the submit. Codex (0.134.0+) parks queued
-    // submits the same way, so it now also runs with type-ahead.
+    // verification still confirms the submit. Codex (0.134.0+) also runs with
+    // type-ahead, but via an active-turn steer rather than CoCo's strict
+    // dequeue-deferral — see codex.ts and CodexBridgeQueue's HOL-block-drop.
     supportsTypeAhead: true,
     altScreen: false,
     modelChoices: [

@@ -218,15 +218,19 @@ export function createCodexAdapter(pathOverride?: string): CliAdapter {
     readyPattern: /›|\d+% left/,  // › for input box, or status bar pattern (e.g. "97% left")
     systemHints: BOTMUX_SHELL_HINTS,
     // Codex 0.134.0+ accepts a message while the current turn is still running:
-    // it parks it ("Messages to be submitted after next tool call") and submits
-    // it once the current turn finishes. Like CoCo, the queued message's rollout
-    // user event is written only at DEQUEUE time, so the transcript the bridge
-    // fallback reads stays interleaved (user1 → asst1 → user2 → asst2) and
-    // CodexBridgeQueue's single-`collecting` attribution (plus the markTimeMs
-    // dequeue-time override) stays correct. The submit log history.jsonl IS
-    // written at submit time even for a queued message, so writeInput's
-    // verification confirms the submit immediately and never spuriously reports
-    // a send failure mid-turn. Verified empirically on codex-cli 0.134.0.
+    // it parks it ("Messages to be submitted after next tool call") via an
+    // active-turn STEER, not a deferred next-turn submit. Two rollout shapes
+    // result (both verified empirically on codex-cli 0.134.0):
+    //   - turn with no tool_call: the queued user event is written when the turn
+    //     ends → interleaved user1 → asstFinal1 → user2 → asstFinal2.
+    //   - turn with a tool_call: the queued input is steered into the SAME turn
+    //     and codex emits ONE merged final → user1 → user2 → assistant_final.
+    // CodexBridgeQueue handles both via HOL-block-drop (a user event arriving
+    // while the collecting turn has no finalText discards that turn), so the
+    // merge case attributes the combined reply to the last steered turn instead
+    // of wedging the queue. The submit log history.jsonl IS written at submit
+    // time even for a parked message, so writeInput's verification confirms the
+    // submit immediately and never spuriously reports a mid-turn send failure.
     supportsTypeAhead: true,
     altScreen: false,   // --no-alt-screen disables alternate screen
     modelChoices: ['gpt-5', 'gpt-5-codex', 'o3', 'o3-mini'],

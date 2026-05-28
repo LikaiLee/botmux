@@ -2393,16 +2393,17 @@ async function flushPending(): Promise<void> {
   // CoCo (0.120.32+) and Codex (0.134.0+) also tolerate type-ahead, but for a
   // different reason than Claude: they park a submit-while-busy message in the
   // TUI's own queue (CoCo: "↑ Press up to edit queued messages"; Codex:
-  // "Messages to be submitted after next tool call") and only write the user
-  // event to the transcript (events.jsonl / rollout) when they DEQUEUE and
-  // start processing it — i.e. AFTER the previous turn's assistant_final. So
-  // the transcript stays strictly interleaved (user1 → asst1 → user2 → asst2)
-  // and CodexBridgeQueue's single-`collecting` attribution stays correct
-  // (with the markTimeMs dequeue-time override) without the queued_command
-  // upgrade Claude needed. (The submit log history.jsonl, which the adapter's
-  // writeInput verification polls, IS written at submit time even for a queued
-  // message, so verification doesn't spuriously fail either.) Both behaviours
-  // verified empirically — Codex on codex-cli 0.134.0.
+  // "Messages to be submitted after next tool call"). CoCo writes the queued
+  // user event only at DEQUEUE time, so its transcript stays strictly
+  // interleaved (user1 → asst1 → user2 → asst2). Codex is an active-turn STEER:
+  // a tool-running turn pulls the queued input into the SAME turn and emits one
+  // merged final (user1 → user2 → assistant_final). CodexBridgeQueue copes with
+  // both via HOL-block-drop (see codex-bridge-queue.ts) plus the markTimeMs
+  // dequeue-time override — no queued_command upgrade like Claude's. (The
+  // submit log history.jsonl, which the adapter's writeInput verification
+  // polls, IS written at submit time even for a parked message, so verification
+  // doesn't spuriously fail either.) All behaviours verified empirically —
+  // Codex on codex-cli 0.134.0.
   const claudeBridgeActive = !!bridgeJsonlPath && !lastInitConfig?.adoptMode;
   const codexBridgeActive = codexBridgeFallbackActive();
   const typeAheadAllowed = cliAdapter.supportsTypeAhead;

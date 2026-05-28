@@ -19,11 +19,16 @@
  * Attribution rule:
  *   - mark()           — push a pending turn anchored to Lark fingerprint.
  *   - ingest(events)   —
- *       * 'user' event whose text matches the head pending turn's
- *         fingerprint → that turn becomes 'started' (collecting).
- *       * 'user' event with no match: dropped, OR (adopt-only) synthesised
- *         as a started local turn ahead of any unstarted Lark turn so
- *         emit ordering reflects when the event landed.
+ *       * 'user' event: first apply HOL-block-drop — if a turn is still
+ *         collecting with no finalText, discard it. Codex 0.134.0 type-ahead
+ *         is an active-turn STEER: a queued message typed while a tool-running
+ *         turn is in flight gets pulled into that SAME turn, which emits one
+ *         merged final (rollout: user1 → user2 → assistant_final). The earlier
+ *         turn never gets its own final, so without this drop it sits at the
+ *         queue head forever and wedges drainEmittable(). Then: a 'user' event
+ *         whose text matches the head pending turn's fingerprint starts it
+ *         (collecting); no match → dropped, OR (adopt-only) synthesised as a
+ *         started local turn ahead of any unstarted Lark turn.
  *       * 'assistant_final' event → the currently-collecting turn closes
  *         with finalText set; eligible for emit on the next drain.
  *   - drainEmittable() — pop FIFO any leading turn that is started AND
@@ -107,6 +112,26 @@ export class CodexBridgeQueue {
       if (!ev.uuid || this.seen.has(ev.uuid)) continue;
       this.seen.add(ev.uuid);
       if (ev.kind === 'user') {
+        // HOL-block drop (codex 0.134.0 active-turn steer): a user event that
+        // arrives while a turn is still collecting with no finalText means
+        // codex steered/merged this input into the active turn — it processes
+        // both as ONE turn and emits a single combined assistant_final, so the
+        // collecting turn will NEVER get its own final. Drop it now, otherwise
+        // it sits at the queue head forever and `drainEmittable()` wedges
+        // (started, no finalText → breaks the FIFO scan). Gated on freshness
+        // (event at/after the collecting turn's mark) so a replayed historical
+        // user event can't evict a live collecting turn. Mirrors Claude's
+        // BridgeTurnQueue.handleTurnStart HOL drop (which keys off "no assistant
+        // text yet" — the streaming-transcript equivalent of "no finalText").
+        if (
+          this.collecting &&
+          this.collecting.finalText === undefined &&
+          (this.collecting.markTimeMs === undefined || ev.timestampMs >= this.collecting.markTimeMs)
+        ) {
+          const idx = this.queue.indexOf(this.collecting);
+          if (idx >= 0) this.queue.splice(idx, 1);
+          this.collecting = null;
+        }
         const next = this.queue.find(t => !t.started);
         let consumedNext = false;
         if (next) {
