@@ -39,7 +39,7 @@ let remoteTeams: Team[] = [];  // teams this deployment joined
 let myDeploymentId = '';
 let suggestedHubUrl = '';
 const pickedByTeam = new Map<string, Set<string>>();
-const collapsedTeams = new Set<string>();
+const expandedTeams = new Set<string>(); // default empty → all teams collapsed; click a team header to expand
 
 function $(id: string): HTMLElement { return document.getElementById(id)!; }
 function allTeams(): Team[] { return [...localTeams, ...remoteTeams]; }
@@ -147,7 +147,7 @@ function renderTeams(): void {
     filtered.forEach(b => shownIds.add(b.larkAppId)); t.bots.forEach(b => totalIds.add(b.larkAppId));
     const visible = new Set(filtered.map(b => b.larkAppId));
     [...pickedSet(t.key)].forEach(a => { if (!visible.has(a)) pickedSet(t.key).delete(a); });
-    const col = collapsedTeams.has(t.key);
+    const col = !expandedTeams.has(t.key); // collapsed unless explicitly expanded
     const conn = t.kind === 'remote'
       ? (t.ok ? ' <span class="ok" style="font-size:12px">已连接</span>' : ` <span class="err" style="font-size:12px">连接失败：${escapeHtml(t.error || '')}</span>`)
       : ' <span class="muted" style="font-size:12px">我托管</span>';
@@ -169,7 +169,7 @@ function renderTeams(): void {
 function wireTeams(): void {
   const el = $('tf-teams');
   el.querySelectorAll<HTMLElement>('.tf-team-h').forEach(h => {
-    h.onclick = () => { const k = h.dataset.tk!; if (collapsedTeams.has(k)) collapsedTeams.delete(k); else collapsedTeams.add(k); renderTeams(); };
+    h.onclick = () => { const k = h.dataset.tk!; if (expandedTeams.has(k)) expandedTeams.delete(k); else expandedTeams.add(k); renderTeams(); };
   });
   el.querySelectorAll<HTMLInputElement>('.tf-pick').forEach(cb => {
     cb.onchange = () => { const s = pickedSet(cb.dataset.tk!); if (cb.checked) s.add(cb.dataset.app!); else s.delete(cb.dataset.app!); };
@@ -265,7 +265,7 @@ async function loadRemote(): Promise<void> {
 
 export function renderTeamFederationPage(root: HTMLElement): void {
   root.innerHTML = homeHtml();
-  pickedByTeam.clear(); collapsedTeams.clear();
+  pickedByTeam.clear(); expandedTeams.clear();
   ['tf-search', 'tf-cli', 'tf-fcap', 'tf-frole'].forEach(id => { const el = $(id); el.oninput = renderTeams; el.onchange = renderTeams; });
   $('tf-modal-cancel').onclick = () => { $('tf-modal').style.display = 'none'; };
   $('tf-modal-save').onclick = async () => {
