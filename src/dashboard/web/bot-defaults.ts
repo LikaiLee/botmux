@@ -133,11 +133,11 @@ export async function renderBotDefaultsPage(root: HTMLElement) {
             <button type="button" data-action="save">${t('botDefaults.save')}</button>
             <span class="oncall-status" data-status></span>
           </div>
+          ${renderAutoStartControls(b)}
         </section>
         ${renderRoleSection(b)}
         ${renderBrandSection(b)}
         ${renderCardBehaviorSection(b)}
-        ${renderAutoStartSection(b)}
       </div>
     </article>`;
   }
@@ -226,14 +226,16 @@ export async function renderBotDefaultsPage(root: HTMLElement) {
     </section>`;
   }
 
-  // 主动开工 — two opt-in triggers. The two checkboxes auto-save on change; the
-  // 场景① prompt has its own save button (a textarea shouldn't PUT per keystroke).
-  function renderAutoStartSection(b: any): string {
+  // 主动开工 — rendered as a sub-block INSIDE the 新群 Oncall section (it's part
+  // of the same "proactively engage" config family). The two checkboxes auto-save
+  // on change; the 场景① prompt has its own save button (a textarea shouldn't PUT
+  // per keystroke). Data-action hooks are unchanged → wireCardHandlers still finds them.
+  function renderAutoStartControls(b: any): string {
     const onJoin = b.autoStartOnGroupJoin === true;
     const onTopic = b.autoStartOnNewTopic === true;
     const joinPrompt: string = typeof b.autoStartOnGroupJoinPrompt === 'string' ? b.autoStartOnGroupJoinPrompt : '';
-    return `<section class="bd-section">
-      <h3 class="bd-section-title">${t('botDefaults.sectionAutoStart')}</h3>
+    return `<div class="bd-subsection">
+      <h4 class="bd-subsection-title">${t('botDefaults.sectionAutoStart')}</h4>
       <label class="checkbox-row">
         <input type="checkbox" data-action="toggle-auto-join" ${onJoin ? 'checked' : ''}>
         <strong>${t('botDefaults.autoStartJoin')}</strong>
@@ -243,8 +245,7 @@ export async function renderBotDefaultsPage(root: HTMLElement) {
         <label>
           <span>${t('botDefaults.autoStartJoinPrompt')}</span>
           <textarea data-input="autoJoinPrompt" rows="3"
-            placeholder="${escapeHtml(t('botDefaults.autoStartJoinPromptPlaceholder'))}"
-            style="width:100%;box-sizing:border-box;font:13px/1.5 ui-monospace,Menlo,monospace;padding:10px">${escapeHtml(joinPrompt)}</textarea>
+            placeholder="${escapeHtml(t('botDefaults.autoStartJoinPromptPlaceholder'))}">${escapeHtml(joinPrompt)}</textarea>
         </label>
         <div class="actions">
           <button type="button" data-action="save-auto-join-prompt">${t('botDefaults.autoStartJoinPromptSave')}</button>
@@ -258,7 +259,7 @@ export async function renderBotDefaultsPage(root: HTMLElement) {
       <div class="actions">
         <span class="oncall-status" data-auto-start-status></span>
       </div>
-    </section>`;
+    </div>`;
   }
 
   function wireCardHandlers() {
