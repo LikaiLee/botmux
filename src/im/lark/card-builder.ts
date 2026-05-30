@@ -161,6 +161,42 @@ export function buildSessionClosedCard(
   return JSON.stringify(card);
 }
 
+/** Build the lightweight placeholder shown while a no-streaming-card bot works. */
+export function buildPendingResponseCard(): string {
+  return JSON.stringify({
+    schema: '2.0',
+    config: { update_multi: true },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '处理中' },
+    },
+    body: {
+      direction: 'vertical',
+      elements: [
+        { tag: 'markdown', content: '🔄 正在处理你的请求...' },
+      ],
+    },
+  });
+}
+
+/** Build the terminal state for an older placeholder superseded by a newer turn. */
+export function buildMergedPendingResponseCard(): string {
+  return JSON.stringify({
+    schema: '2.0',
+    config: { update_multi: true },
+    header: {
+      template: 'grey',
+      title: { tag: 'plain_text', content: '已合并' },
+    },
+    body: {
+      direction: 'vertical',
+      elements: [
+        { tag: 'markdown', content: '已收到后续消息，合并处理中。' },
+      ],
+    },
+  });
+}
+
 /**
  * Build a frozen-snapshot card to PATCH onto the source-chat streaming card
  * after `/relay` moves the session elsewhere.

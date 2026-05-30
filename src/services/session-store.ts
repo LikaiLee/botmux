@@ -72,13 +72,57 @@ function load(): void {
   loaded = true;
 }
 
+function mergePendingResponseState(incoming: Session, existing: Session | undefined): Session {
+  if (!existing) return incoming;
+
+  // `botmux send` runs in a separate process from daemon.  Both processes write
+  // the same session file, so pending-response fields need conflict resolution
+  // here instead of relying on every caller to sync its in-memory Session first.
+  const hasExistingPendingState = existing.pendingResponseCardId !== undefined
+    || existing.pendingResponseCardState !== undefined
+    || existing.lastPatchedResponseCardId !== undefined;
+  if (!hasExistingPendingState) return incoming;
+
+  const incomingStartsNewOpenCard = incoming.pendingResponseCardState === 'open'
+    && !!incoming.pendingResponseCardId
+    && incoming.pendingResponseCardId !== existing.lastPatchedResponseCardId;
+  if (incomingStartsNewOpenCard) return incoming;
+
+  const incomingMarksPatched = incoming.pendingResponseCardState === 'patched';
+  // Old turn completion may race after a newer turn has already posted its open
+  // card. Preserve the newer open card; only carry over the old patched id.
+  const existingHasNewerOpenCard = existing.pendingResponseCardState === 'open'
+    && !!existing.pendingResponseCardId
+    && incoming.lastPatchedResponseCardId !== existing.pendingResponseCardId;
+  if (incomingMarksPatched && !existingHasNewerOpenCard) return incoming;
+
+  return {
+    ...incoming,
+    pendingResponseCardId: existing.pendingResponseCardId,
+    pendingResponseCardState: existing.pendingResponseCardState,
+    lastPatchedResponseCardId: existing.lastPatchedResponseCardId,
+  };
+}
+
+function readExistingSessionsFromDisk(fp: string): Record<string, Session> {
+  if (!existsSync(fp)) return {};
+  try {
+    return JSON.parse(readFileSync(fp, 'utf-8')) as Record<string, Session>;
+  } catch {
+    return {};
+  }
+}
+
 function save(): void {
   ensureDir();
   const fp = getFilePath();
   const tmpFp = `${fp}.${process.pid}.${randomUUID()}.tmp`;
+  const existing = readExistingSessionsFromDisk(fp);
   const obj: Record<string, Session> = {};
   for (const [k, v] of sessions) {
-    obj[k] = v;
+    const merged = mergePendingResponseState(v, existing[k]);
+    sessions.set(k, merged);
+    obj[k] = merged;
   }
   writeFileSync(tmpFp, JSON.stringify(obj, null, 2), 'utf-8');
   renameSync(tmpFp, fp);

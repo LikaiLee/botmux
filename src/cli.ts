@@ -1414,6 +1414,9 @@ interface SessionData {
   quoteTargetId?: string;
   quoteTargetSenderOpenId?: string;
   quoteTargetSenderIsBot?: boolean;
+  pendingResponseCardId?: string;
+  pendingResponseCardState?: 'open' | 'patched';
+  lastPatchedResponseCardId?: string;
 }
 
 /**
@@ -2684,6 +2687,8 @@ function argValues(args: string[], ...flags: string[]): string[] {
 // daemon's bridge fallback path can produce identical cards. cmdSend
 // keeps using `buildCardBodyElements` and `hasMarkdown` from there.
 import { buildCardBodyElements, hasMarkdown, brandFooterSegment } from './im/lark/md-card.js';
+import { claimPendingResponseCard, COMPLETED_REACTION_EMOJI_TYPE, isPendingResponseCardOpen, markPendingResponseCardPatched, shouldUseCardForSend } from './core/pending-response.js';
+import { clearPendingResponsePatchMarker, writePendingResponsePatchMarker } from './services/pending-response-transaction-store.js';
 import { resolveBrandLabel } from './bot-registry.js';
 import { config } from './config.js';
 import { resolveQuoteTarget, validateMentionDecision } from './services/send-policy.js';
@@ -2800,7 +2805,7 @@ async function cmdSend(rest: string[]): Promise<void> {
   const { registerBot, loadBotConfigs, findOncallChatForAnyBot } = await import('./bot-registry.js');
   try { for (const cfg of loadBotConfigs()) registerBot(cfg); } catch { /* */ }
 
-  const { sendMessage, replyMessage, uploadImage, uploadFile, MessageWithdrawnError } = await import('./im/lark/client.js');
+  const { sendMessage, replyMessage, uploadImage, uploadFile, updateMessage, addReaction, MessageWithdrawnError } = await import('./im/lark/client.js');
   const appId = s.larkAppId!;
   // Effective target chat for top-level mode (defaults to session's chat)
   const targetChatId = overrideChatId ?? s.chatId;
@@ -2821,6 +2826,35 @@ async function cmdSend(rest: string[]): Promise<void> {
     (sendTopLevel || isChatScope)
       ? sendMessage(appId, targetChatId, content, msgType)
       : replyMessage(appId, s.rootMessageId, content, msgType, true);
+  const dispatchOrPatchPending = async (content: string, msgType: string): Promise<string> => {
+    if (sendTopLevel || overrideChatId || files.length > 0) return dispatchPrimary(content, msgType);
+    const pendingCardId = msgType === 'interactive' ? claimPendingResponseCard(s) : undefined;
+    if (!pendingCardId) return dispatchPrimary(content, msgType);
+    try {
+      writePendingResponsePatchMarker(sid, pendingCardId);
+      await updateMessage(appId, pendingCardId, content);
+      markPendingResponseCardPatched(s);
+      if (s.quoteTargetId) {
+        addReaction(appId, s.quoteTargetId, COMPLETED_REACTION_EMOJI_TYPE)
+          .catch((err: any) => logger.warn(`[send:${sid.substring(0, 8)}] failed to add completion reaction to ${s.quoteTargetId}: ${err?.message ?? err}`));
+      }
+      saveSession(s);
+      clearPendingResponsePatchMarker(sid);
+      return pendingCardId;
+    } catch (err: any) {
+      if (err instanceof MessageWithdrawnError) {
+        console.error(`处理中卡片 ${pendingCardId} 已撤回，改为发送新消息`);
+        markPendingResponseCardPatched(s);
+        saveSession(s);
+        clearPendingResponsePatchMarker(sid);
+        return dispatchPrimary(content, msgType);
+      }
+      console.error(`更新处理中卡片失败，保留处理中卡片状态: ${err?.message ?? err}`);
+      saveSession(s);
+      clearPendingResponsePatchMarker(sid);
+      throw err;
+    }
+  };
 
   // Quote chain (普通群): the primary message replies to the turn's target so
   // Lark renders a 引用 chain. --quote overrides, --no-quote opts out. Thread
@@ -2954,8 +2988,14 @@ async function cmdSend(rest: string[]): Promise<void> {
         });
 
     // Decide: interactive card (renders markdown) vs. post (plain text).
-    // Explicit --card / --text wins; otherwise auto-detect markdown syntax.
-    const useCard = forceCard || (!forceText && hasMarkdown(text));
+    // An open pending response card takes precedence over --text so the
+    // placeholder can close cleanly; otherwise explicit --card / --text wins.
+    const useCard = shouldUseCardForSend({
+      forceCard,
+      forceText,
+      hasMarkdown: hasMarkdown(text),
+      hasOpenPendingResponseCard: isPendingResponseCardOpen(s),
+    });
 
     const mentionMap = new Map<string, string>();
     for (const m of mentions) if (m.name) mentionMap.set(m.name.toLowerCase(), m.open_id);
@@ -3049,7 +3089,7 @@ async function cmdSend(rest: string[]): Promise<void> {
         config: { update_multi: true },
         body: { direction: 'vertical', elements },
       });
-      messageId = await dispatchPrimary(cardJson, 'interactive');
+      messageId = await dispatchOrPatchPending(cardJson, 'interactive');
     } else {
       // Plain-text path: build post content, paragraph per line.
       const postContent: any[][] = text ? text.split('\n').map((line: string) => {
